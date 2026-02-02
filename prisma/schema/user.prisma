@@ -1,0 +1,55 @@
+enum UserRole {
+    SUPER_ADMIN        // Owner ของระบบ (ไม่ต้องมี employee)
+    SENOIR_ACCOUNTING  // หัวหน้าฝ่ายการเงิน (ต้องเป็น employee)
+    ACCOUNTING         // ฝ่ายการเงิน (ต้องเป็น employee)
+    COORDINATOR        // ตัวแทนประสานงาน (ต้องเป็น employee)
+}
+
+model User {
+    id              Int         @id @default(autoincrement())
+    employeeId      Int?        @map("employee_id")  // null สำหรับ SUPER_ADMIN
+
+    // authen
+    username        String      @unique @map("username")
+    passwordHash    String      @map("password_hash")
+    role            UserRole    @default(ACCOUNTING) @map("role")
+
+    // status
+    isActive        Boolean     @default(true) @map("is_active")
+    isDeleted       Boolean     @default(false) @map("is_deleted")
+
+    createdAt       DateTime    @default(now()) @map("created_at")
+    updatedAt       DateTime?   @updatedAt @map("updated_at")
+    lastLoginAt     DateTime?   @map("last_login_at")
+
+    // map relational
+    employee        Employee?   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+    sessions        Session[]
+
+    @@map("users")
+    @@index([employeeId])
+    @@index([username])
+    @@index([isActive])
+}
+
+model Session {
+    id              Int         @id @default(autoincrement())
+    userId          Int         @map("user_id")
+
+    // token
+    token           String      @unique @map("token")          // JWT
+    refreshToken    String      @unique @map("refresh_token")  // random
+
+    expiresAt       DateTime    @map("expiresAt")
+    createdAt       DateTime    @default(now()) @map("created_at")
+    updatedAt       DateTime?   @updatedAt @map("updated_at")
+
+    // map relational
+    user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@map("sessions")
+    @@index([userId])
+    @@index([token])
+    @@index([refreshToken])
+    @@index([expiresAt])
+}

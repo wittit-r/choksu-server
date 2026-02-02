@@ -1,0 +1,26 @@
+{
+  "name": "choksu-backend",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "format": "prettier --write \"src/**/*.{js,json}\""
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.3.0",
+    "@prisma/client": "^7.3.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "ioredis": "^5.9.2",
+    "joi": "^18.0.2",
+    "prisma": "^7.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11",
+    "prettier": "^3.5.3"
+  }
+}
