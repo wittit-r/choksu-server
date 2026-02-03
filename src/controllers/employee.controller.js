@@ -27,7 +27,10 @@ class EmployeeController {
         const body = validate(
             req.body,
             Joi.object({
-                name: Joi.string().required(),
+                firstName: Joi.string().required(),
+                lastName: Joi.string().required(),
+                idCard: Joi.string().required(),
+                phone: Joi.string().required(),
             }),
         );
 
@@ -36,6 +39,30 @@ class EmployeeController {
         res.status(200).json({
             status: "success",
             data: employee,
+        });
+    }
+
+    createUser = async (req, res) => {
+        const { employeeId } = validate(
+            req.params,
+            Joi.object({
+                employeeId: Joi.number().integer().required(),
+            }),
+        );
+
+        const body = validate(
+            req.body,
+            Joi.object({
+                username: Joi.string().required().min(3).max(50),
+                password: Joi.string().required().min(6),
+            }),
+        );
+
+        const user = await employeeService.createUser({ employeeId, ...body });
+
+        res.status(200).json({
+            status: "success",
+            data: user,
         });
     }
 }
