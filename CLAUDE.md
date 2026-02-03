@@ -73,7 +73,7 @@ Services รับผิดชอบ business logic และ database operation
 ตัวอย่างการใช้งานใน Service:
 
 ```javascript
-import { err } from "../utils/error.js";
+import err from "../utils/error.js";
 
 // Throw not found error
 if (!employee) {
@@ -162,7 +162,7 @@ GET /api/employees?page=1&limit=10&search=john
 2. **สร้าง Service** (`src/services/xxx.service.js`):
    ```javascript
    import prisma from "../databases/prisma.js";
-   import { err } from "../utils/error.js";
+   import err from "../utils/error.js";
 
    class XxxService {
        async getXxxs(query) {
