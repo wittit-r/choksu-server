@@ -40,7 +40,10 @@ model Session {
     token           String      @unique @map("token")          // JWT
     refreshToken    String      @unique @map("refresh_token")  // random
 
-    expiresAt       DateTime    @map("expiresAt")
+    // Token expiration times
+    accessExpiresAt DateTime    @map("access_expires_at")  // Access token expiration (1 hour)
+    refreshExpiresAt DateTime   @map("refresh_expires_at") // Refresh token expiration (7 days)
+
     createdAt       DateTime    @default(now()) @map("created_at")
     updatedAt       DateTime?   @updatedAt @map("updated_at")
 
@@ -51,5 +54,6 @@ model Session {
     @@index([userId])
     @@index([token])
     @@index([refreshToken])
-    @@index([expiresAt])
+    @@index([accessExpiresAt])
+    @@index([refreshExpiresAt])
 }
