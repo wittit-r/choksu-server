@@ -1,19 +1,15 @@
 import express from "express";
 import { wrap } from "../middlewares/errorHandler.js";
 import authController from "../controllers/auth.controller.js";
-import { auth, authorize } from "../middlewares/auth.js";
+import { auth } from "../middlewares/auth.js";
 
 const router = express.Router();
 
 /**
- * Public Routes (ไม่ต้องล็อกอิน)
+ * /auth
  */
 router.post("/login", wrap(authController.login));
 router.post("/refresh", wrap(authController.refreshAccessToken));
-
-/**
- * Protected Routes (ต้องล็อกอิน)
- */
 router.post("/logout", auth, wrap(authController.logout));
 
 /**

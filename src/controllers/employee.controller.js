@@ -43,10 +43,10 @@ class EmployeeController {
     }
 
     createUser = async (req, res) => {
-        const { employeeId } = validate(
+        const { id } = validate(
             req.params,
             Joi.object({
-                employeeId: Joi.number().integer().required(),
+                id: Joi.number().integer().required(),
             }),
         );
 
@@ -58,11 +58,39 @@ class EmployeeController {
             }),
         );
 
-        const user = await employeeService.createUser({ employeeId, ...body });
+        const user = await employeeService.createUser({ id, ...body });
 
         res.status(200).json({
             status: "success",
             data: user,
+        });
+    }
+
+    updateEmployee = async (req, res) => {
+        // Validate params
+        const { id } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+            })
+        );
+
+        const body = validate(
+            req.body,
+            Joi.object({
+                firstName: Joi.string().not(''),
+                lastName: Joi.string().not(''),
+                idCard: Joi.string().not(''),
+                phone: Joi.string().not(''),
+                isActive: Joi.boolean(),
+            }).min(1) // ต้องส่งมาอย่างน้อย 1 ฟิลด์
+        );
+
+        const employee = await employeeService.updateEmployee(id, body);
+
+        res.status(200).json({
+            status: "success",
+            data: employee,
         });
     }
 }

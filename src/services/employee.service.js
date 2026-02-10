@@ -52,18 +52,52 @@ class EmployeeService {
         return employee;
     }
 
-    async createUser({ employeeId, username, password }) {
+    async updateEmployee(id, { firstName, lastName, idCard, phone, isActive }) {
+        // ตรวจสอบว่ามี employee อยู่จริง
         const employee = await prisma.employee.findUnique({
-            where: { id: employeeId },
+            where: { id },
+            select: { id: true }, // เช็คเฉพาะ id เพื่อประหยัด resource
         });
 
         if (!employee) {
-            throw err.notFound({ employeeId }, 'Employee not found');
+            throw err.notFound({ id });
+        }
+
+        // อัปเดตเฉพาะฟิลด์ที่ส่งมา และ select เฉพาะฟิลด์ที่ต้องการคืนค่า
+        const updated = await prisma.employee.update({
+            where: { id },
+            data: {
+                ...(firstName !== undefined && { firstName }),
+                ...(lastName !== undefined && { lastName }),
+                ...(idCard !== undefined && { idCard }),
+                ...(phone !== undefined && { phone }),
+                ...(isActive !== undefined && { isActive }),
+            },
+            select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                idCard: true,
+                phone: true,
+                isActive: true,
+            },
+        });
+
+        return updated;
+    }
+
+    async createUser({ id, username, password }) {
+        const employee = await prisma.employee.findUnique({
+            where: { id: id },
+        });
+
+        if (!employee) {
+            throw err.notFound({ id });
         }
 
         const user = await prisma.user.create({
             data: {
-                employeeId,
+                employeeId: id,
                 username,
                 passwordHash: await hashPassword(password),
                 role: 'ACCOUNTING',
