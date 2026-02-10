@@ -4,7 +4,7 @@ import authService from "../services/auth.service.js";
 
 class AuthController {
     /**
-     * POST /api/auth/login
+     * POST /auth/login
      * Body: { username, password }
      */
     login = async (req, res) => {
@@ -26,7 +26,7 @@ class AuthController {
     };
 
     /**
-     * POST /api/auth/refresh
+     * POST /auth/refresh
      * Body: { refreshToken }
      */
     refreshAccessToken = async (req, res) => {
@@ -46,7 +46,7 @@ class AuthController {
     };
 
     /**
-     * POST /api/auth/logout
+     * POST /auth/logout
      */
     logout = async (req, res) => {
         // Call service
