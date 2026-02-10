@@ -1,11 +1,15 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-// import errorException from "./middlewares/errorException.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import routes from "./routes/index.js";
+import morgan from "morgan";
 
 const app = express();
+
+if (process.env.NODE_ENV === "development") {
+    app.use(morgan("dev"));
+}
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -29,7 +33,6 @@ app.get("/", (req, res) => {
 app.use("/", routes);
 
 // Global error exception
-// app.use(errorException);
 app.use(errorHandler);
 
 const port = process.env.PORT || 9500;
