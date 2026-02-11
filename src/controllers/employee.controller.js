@@ -110,6 +110,36 @@ class EmployeeController {
             data: employee,
         });
     }
+
+    updateEmployeeUser = async (req, res) => {
+        // Validate params
+        const { id, userId } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+                userId: Joi.number().integer().required(),
+            })
+        );
+
+        // Validate body
+        const body = validate(
+            req.body,
+            Joi.object({
+                username: Joi.string().min(3).max(50).not(''),
+                password: Joi.string().min(6).not(''),
+                role: Joi.string().valid('SUPER_ADMIN', 'SENOIR_ACCOUNTING', 'ACCOUNTING', 'COORDINATOR'),
+                isActive: Joi.boolean(),
+                isDeleted: Joi.boolean().valid(true), // ลบได้เท่านั้น
+            }).min(1) // ต้องส่งมาอย่างน้อย 1 ฟิลด์
+        );
+
+        const user = await employeeService.updateEmployeeUser({ employeeId: id, userId, ...body });
+
+        res.status(200).json({
+            status: "success",
+            data: user,
+        });
+    }
 }
 
 export default new EmployeeController();

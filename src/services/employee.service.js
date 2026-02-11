@@ -1,4 +1,5 @@
 import prisma from "../databases/prisma.js";
+import redis from "../databases/redis.js";
 import err from "../utils/error.js";
 import { hashPassword } from "../utils/password.js";
 
@@ -140,6 +141,71 @@ class EmployeeService {
 
         return user;
 
+    }
+
+    async updateEmployeeUser({ employeeId, userId, username, password, role, isActive, isDeleted }) {
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { employeeId: true, isDeleted: true },
+        });
+
+        if (!user || user.employeeId !== employeeId || user.isDeleted === true) {
+            throw err.notFound({
+                employeeId,
+                userId,
+            });
+        }
+
+        const updateData = {};
+        if (username !== undefined) {
+            // ตรวจสอบชื่อผู้ใช้งาน
+            const existingUser = await prisma.user.findUnique({
+                where: { username, isDeleted: false },
+                select: { id: true },
+            });
+
+            if (existingUser) {
+                throw err.conflict({ username }, "ชื่อผู้ใช้งานนี้ ถูกใช้งานแล้ว");
+            }
+
+            updateData.username = username;
+        }
+        if (password !== undefined) updateData.passwordHash = await hashPassword(password);
+        if (role !== undefined) updateData.role = role;
+        if (isActive !== undefined) updateData.isActive = isActive;
+        if (isDeleted !== undefined) updateData.isDeleted = isDeleted;
+
+        const updated = await prisma.$transaction(async (tx) => {
+            // อัปเดต user
+            const updated = await tx.user.update({
+                where: { id: userId },
+                data: updateData,
+                select: {
+                    id: true,
+                    username: true,
+                    role: true,
+                    isActive: true,
+                    isDeleted: true,
+                    employeeId: true,
+                },
+            });
+
+            // ลบ session ทั้งหมดของ user (DB)
+            await tx.session.deleteMany({
+                where: { userId: userId },
+            });
+
+            return updated;
+        });
+
+        // ลบ session ทั้งหมดของ user จาก Redis (ทำหลัง transaction สำเร็จ)
+        // Redis key pattern: auth:access:{userId}:{accessToken}
+        const keys = await redis().keys(`auth:access:${userId}:*`);
+        if (keys.length > 0) {
+            await redis().del(...keys);
+        }
+
+        return updated;
     }
 }
 
