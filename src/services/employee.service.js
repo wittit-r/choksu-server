@@ -52,6 +52,28 @@ class EmployeeService {
         return employee;
     }
 
+    async getEmployeeById({ id }) {
+        const employee = await prisma.employee.findUnique({
+            where: { id },
+            select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                idCard: true,
+                phone: true,
+                isActive: true,
+                createdAt: true,
+                updatedAt: true,
+            },
+        });
+
+        if (!employee) {
+            throw err.notFound({ id });
+        }
+
+        return employee;
+    }
+
     async updateEmployee(id, { firstName, lastName, idCard, phone, isActive }) {
         // ตรวจสอบว่ามี employee อยู่จริง
         const employee = await prisma.employee.findUnique({

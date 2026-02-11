@@ -42,6 +42,22 @@ class EmployeeController {
         });
     }
 
+    getEmployeeById = async (req, res) => {
+        const { id } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+            })
+        );
+
+        const employee = await employeeService.getEmployeeById({ id });
+
+        res.status(200).json({
+            status: "success",
+            data: employee,
+        });
+    }
+
     createUser = async (req, res) => {
         const { id } = validate(
             req.params,
