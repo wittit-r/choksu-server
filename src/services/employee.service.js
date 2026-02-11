@@ -2,6 +2,7 @@ import prisma from "../databases/prisma.js";
 import redis from "../databases/redis.js";
 import err from "../utils/error.js";
 import { hashPassword } from "../utils/password.js";
+import prismaSelectDefault from "../utils/prismaSelectDefault.js";
 
 class EmployeeService {
     async getEmployees({ page, limit, sort, sortBy, ...query }) {
@@ -23,14 +24,7 @@ class EmployeeService {
         const [ employees, total ] = await Promise.all([
             prisma.employee.findMany({
                 where,
-                select: {
-                    id: true,
-                    firstName: true,
-                    lastName: true,
-                    idCard: true,
-                    phone: true,
-                    isActive: true,
-                },
+                select: prismaSelectDefault.employee,
                 skip: (page - 1) * limit,
                 take: limit,
                 orderBy: {
@@ -61,6 +55,11 @@ class EmployeeService {
                 idCard,
                 phone,
             },
+            select: {
+                ...prismaSelectDefault.employee,
+                createdAt: true,
+                updatedAt: true,
+            },
         });
         return employee;
     }
@@ -69,12 +68,7 @@ class EmployeeService {
         const employee = await prisma.employee.findUnique({
             where: { id },
             select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                idCard: true,
-                phone: true,
-                isActive: true,
+                ...prismaSelectDefault.employee,
                 createdAt: true,
                 updatedAt: true,
             },
@@ -109,12 +103,9 @@ class EmployeeService {
                 ...(isActive !== undefined && { isActive }),
             },
             select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                idCard: true,
-                phone: true,
-                isActive: true,
+                ...prismaSelectDefault.employee,
+                createdAt: true,
+                updatedAt: true,
             },
         });
 
@@ -136,6 +127,11 @@ class EmployeeService {
                 username,
                 passwordHash: await hashPassword(password),
                 role: 'ACCOUNTING',
+            },
+            select: {
+                ...prismaSelectDefault.user,
+                createdAt: true,
+                updatedAt: true,
             },
         });
 
@@ -181,12 +177,9 @@ class EmployeeService {
                 where: { id: userId },
                 data: updateData,
                 select: {
-                    id: true,
-                    username: true,
-                    role: true,
-                    isActive: true,
-                    isDeleted: true,
-                    employeeId: true,
+                    ...prismaSelectDefault.user,
+                    createdAt: true,
+                    updatedAt: true,
                 },
             });
 

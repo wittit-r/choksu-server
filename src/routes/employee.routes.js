@@ -12,7 +12,7 @@ router.get("/", auth, wrap(employeeController.getEmployees));
 router.post("/", auth, wrap(employeeController.createEmployee));
 router.get("/:id", auth, wrap(employeeController.getEmployeeById));
 router.patch("/:id", auth, wrap(employeeController.updateEmployee));
-router.post("/:id/users", auth, wrap(employeeController.createUser));
+router.post("/:id/users", auth, wrap(employeeController.createEmployeeUser));
 router.patch("/:id/users/:userId", auth, wrap(employeeController.updateEmployeeUser));
 
 export default router;

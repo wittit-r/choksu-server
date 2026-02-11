@@ -24,25 +24,6 @@ class EmployeeController {
         });
     }
 
-    createEmployee = async (req, res) => {
-        const body = validate(
-            req.body,
-            Joi.object({
-                firstName: Joi.string().required(),
-                lastName: Joi.string().required(),
-                idCard: Joi.string().required(),
-                phone: Joi.string().required(),
-            }),
-        );
-
-        const employee = await employeeService.createEmployee(body);
-
-        res.status(200).json({
-            status: "success",
-            data: employee,
-        });
-    }
-
     getEmployeeById = async (req, res) => {
         const { id } = validate(
             req.params,
@@ -59,27 +40,22 @@ class EmployeeController {
         });
     }
 
-    createUser = async (req, res) => {
-        const { id } = validate(
-            req.params,
-            Joi.object({
-                id: Joi.number().integer().required(),
-            }),
-        );
-
+    createEmployee = async (req, res) => {
         const body = validate(
             req.body,
             Joi.object({
-                username: Joi.string().required().min(3).max(50),
-                password: Joi.string().required().min(6),
+                firstName: Joi.string().required(),
+                lastName: Joi.string().required(),
+                idCard: Joi.string().required(),
+                phone: Joi.string().required(),
             }),
         );
 
-        const user = await employeeService.createUser({ id, ...body });
+        const employee = await employeeService.createEmployee(body);
 
         res.status(200).json({
             status: "success",
-            data: user,
+            data: employee,
         });
     }
 
@@ -108,6 +84,30 @@ class EmployeeController {
         res.status(200).json({
             status: "success",
             data: employee,
+        });
+    }
+
+    createEmployeeUser = async (req, res) => {
+        const { id } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+            }),
+        );
+
+        const body = validate(
+            req.body,
+            Joi.object({
+                username: Joi.string().required().min(3).max(50),
+                password: Joi.string().required().min(6),
+            }),
+        );
+
+        const user = await employeeService.createUser({ id, ...body });
+
+        res.status(200).json({
+            status: "success",
+            data: user,
         });
     }
 
