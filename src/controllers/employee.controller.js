@@ -87,6 +87,53 @@ class EmployeeController {
         });
     }
 
+    getEmployeeUsers = async (req, res) => {
+        const { id } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+            })
+        );
+
+        const query = validate(
+            req.query,
+            Joi.object({
+                username: Joi.string(),
+                role: Joi.string().valid('SUPER_ADMIN', 'SENOIR_ACCOUNTING', 'ACCOUNTING', 'COORDINATOR'),
+                isActive: Joi.boolean(),
+                page: Joi.number().integer().default(1),
+                limit: Joi.number().integer().default(10),
+                sort: Joi.string().valid('asc', 'desc').default('asc'),
+                sortBy: Joi.string().valid('username', 'role', 'createdAt').default('createdAt'),
+            })
+        );
+
+        const { data, pagination } = await employeeService.getEmployeeUsers({ employeeId: id, ...query });
+
+        res.status(200).json({
+            status: "success",
+            data,
+            pagination,
+        });
+    }
+
+    getEmployeeUserById = async (req, res) => {
+        const { id, userId } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+                userId: Joi.number().integer().required(),
+            })
+        );
+
+        const user = await employeeService.getEmployeeUserById({ employeeId: id, userId });
+
+        res.status(200).json({
+            status: "success",
+            data: user,
+        });
+    }
+
     createEmployeeUser = async (req, res) => {
         const { id } = validate(
             req.params,

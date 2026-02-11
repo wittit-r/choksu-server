@@ -112,6 +112,84 @@ class EmployeeService {
         return updated;
     }
 
+    async getEmployeeUsers({ employeeId, page, limit, sort, sortBy, username, role, isActive }) {
+        // ตรวจสอบว่า employee มีอยู่จริง
+        const employee = await prisma.employee.findUnique({
+            where: { id: employeeId },
+            select: { id: true },
+        });
+
+        if (!employee) {
+            throw err.notFound({ employeeId });
+        }
+
+        const where = {
+            employeeId,
+            isDeleted: false,
+        };
+
+        if (username) {
+            where.username = { contains: username, mode: 'insensitive' };
+        }
+
+        if (role) {
+            where.role = role;
+        }
+
+        if (isActive !== undefined) {
+            where.isActive = isActive;
+        }
+
+        const [ users, total ] = await Promise.all([
+            prisma.user.findMany({
+                where,
+                select: prismaSelectDefault.user,
+                skip: (page - 1) * limit,
+                take: limit,
+                orderBy: {
+                    [sortBy]: sort,
+                },
+            }),
+            prisma.user.count({
+                where,
+            }),
+        ]);
+
+        return {
+            data: users,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
+    }
+
+    async getEmployeeUserById({ employeeId, userId }) {
+        const user = await prisma.user.findFirst({
+            where: {
+                id: userId,
+                employeeId,
+                isDeleted: false,
+            },
+            select: {
+                ...prismaSelectDefault.user,
+                createdAt: true,
+                updatedAt: true,
+            },
+        });
+
+        if (!user) {
+            throw err.notFound({
+                employeeId,
+                userId,
+            });
+        }
+
+        return user;
+    }
+
     async createUser({ id, username, password }) {
         const employee = await prisma.employee.findUnique({
             where: { id: id },
