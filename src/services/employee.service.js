@@ -15,9 +15,21 @@ class EmployeeService {
             ];
         }
 
+        if (query.isActive) {
+            where.isActive = query.isActive;
+        }
+
         const [ employees, total ] = await Promise.all([
             prisma.employee.findMany({
                 where,
+                select: {
+                    id: true,
+                    firstName: true,
+                    lastName: true,
+                    idCard: true,
+                    phone: true,
+                    isActive: true,
+                },
                 skip: (page - 1) * limit,
                 take: limit,
                 orderBy: {

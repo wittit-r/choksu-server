@@ -7,6 +7,7 @@ class EmployeeController {
             req.query,
             Joi.object({
                 search: Joi.string(),
+                isActive: Joi.boolean(),
                 page: Joi.number().integer().default(1),
                 limit: Joi.number().integer().default(10),
                 sort: Joi.string().valid('asc', 'desc').default('asc'),
