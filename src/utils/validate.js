@@ -106,7 +106,7 @@ const simplifyJoiErrors = (details, simple = true) => {
  */
 const validate = (input, schema, options = {}) => {
     // Deep trim input ก่อน validate (ตัดช่องว่างหน้าหลัง)
-    input = object.deepTrim(input);
+    input = object.deepTrim(input || {});
 
     // Default options
     const defaultOptions = {
