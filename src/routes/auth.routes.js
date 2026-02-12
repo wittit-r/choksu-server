@@ -17,7 +17,7 @@ router.post("/logout", auth, wrap(authController.logout));
  */
 router.get("/me", auth, wrap(async (req, res) => {
     res.status(200).json({
-        status: "success",
+        success: true,
         data: req.user
     });
 }));

@@ -18,7 +18,7 @@ class EmployeeController {
         const { data, pagination } = await employeeService.getEmployees(query);
 
         res.status(200).json({
-            status: "success",
+            success: true,
             data,
             pagination,
         });
@@ -35,7 +35,7 @@ class EmployeeController {
         const employee = await employeeService.getEmployeeById({ id });
 
         res.status(200).json({
-            status: "success",
+            success: true,
             data: employee,
         });
     }
@@ -54,7 +54,7 @@ class EmployeeController {
         const employee = await employeeService.createEmployee(body);
 
         res.status(200).json({
-            status: "success",
+            success: true,
             data: employee,
         });
     }
@@ -82,7 +82,7 @@ class EmployeeController {
         const employee = await employeeService.updateEmployee(id, body);
 
         res.status(200).json({
-            status: "success",
+            success: true,
             data: employee,
         });
     }
@@ -111,7 +111,7 @@ class EmployeeController {
         const { data, pagination } = await employeeService.getEmployeeUsers({ employeeId: id, ...query });
 
         res.status(200).json({
-            status: "success",
+            success: true,
             data,
             pagination,
         });
@@ -129,7 +129,7 @@ class EmployeeController {
         const user = await employeeService.getEmployeeUserById({ employeeId: id, userId });
 
         res.status(200).json({
-            status: "success",
+            success: true,
             data: user,
         });
     }
@@ -153,7 +153,7 @@ class EmployeeController {
         const user = await employeeService.createUser({ id, ...body });
 
         res.status(200).json({
-            status: "success",
+            success: true,
             data: user,
         });
     }
@@ -183,7 +183,7 @@ class EmployeeController {
         const user = await employeeService.updateEmployeeUser({ employeeId: id, userId, ...body });
 
         res.status(200).json({
-            status: "success",
+            success: true,
             data: user,
         });
     }
