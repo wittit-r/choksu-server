@@ -8,7 +8,7 @@ import { comparePassword } from '../utils/password.js';
 
 // Redis Key Strategy: "auth:access:{userId}:{accessToken}"
 const REDIS_ACCESS_PREFIX = 'auth:access:';
-const REDIS_ACCESS_TTL = 60; // 1 hour (seconds)
+const REDIS_ACCESS_TTL = 3600; // 1 hour (seconds)
 
 class AuthService {
     /**
@@ -173,8 +173,7 @@ class AuthService {
         const newAccessTokenExpiresAt = new Date();
         const newRefreshTokenExpiresAt = new Date();
 
-        // newAccessTokenExpiresAt.setHours(newAccessTokenExpiresAt.getHours() + 1); // +1 hour
-        newAccessTokenExpiresAt.setMinutes(newAccessTokenExpiresAt.getMinutes() + 1); // +1 minute
+        newAccessTokenExpiresAt.setHours(newAccessTokenExpiresAt.getHours() + 1); // +1 hour
         newRefreshTokenExpiresAt.setDate(newRefreshTokenExpiresAt.getDate() + 7); // +7 days
 
         return {
