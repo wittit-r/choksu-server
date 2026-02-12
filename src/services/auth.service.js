@@ -3,11 +3,12 @@ import crypto from 'crypto';
 import prisma from '../databases/prisma.js';
 import redis from '../databases/redis.js';
 import err from '../utils/error.js';
+import prismaSelectDefault from '../utils/prismaSelectDefault.js';
 import { comparePassword } from '../utils/password.js';
 
 // Redis Key Strategy: "auth:access:{userId}:{accessToken}"
 const REDIS_ACCESS_PREFIX = 'auth:access:';
-const REDIS_ACCESS_TTL = 3600; // 1 hour (seconds)
+const REDIS_ACCESS_TTL = 60; // 1 hour (seconds)
 
 class AuthService {
     /**
@@ -39,7 +40,7 @@ class AuthService {
         const token = this._generateToken();
 
         // 5. บันทึก session ลง Database
-        const session = await prisma.session.create({
+        await prisma.session.create({
             data: {
                 userId: user.id,
                 token: token.accessToken,
@@ -53,9 +54,10 @@ class AuthService {
         const redisKey = `${REDIS_ACCESS_PREFIX}${user.id}:${token.accessToken}`;
         await redis().setex(redisKey, REDIS_ACCESS_TTL, JSON.stringify({
             userId: user.id,
+            username: user.username,
             role: user.role,
+            name: user.employee ? `${user.employee.firstName} ${user.employee.lastName}` : null,
             employeeId: user.employeeId,
-            sessionId: session.id
         }));
 
         // 7. อัปเดต lastLoginAt
@@ -69,13 +71,7 @@ class AuthService {
             accessToken: token.accessToken,
             refreshToken: token.refreshToken,
             accessTokenExpiresAt: token.accessTokenExpiresAt,
-            user: {
-                id: user.id,
-                username: user.username,
-                role: user.role,
-                employeeId: user.employeeId,
-                employee: user.employee, // อาจจะไม่มี ถ้าเป็น SUPER_ADMIN
-            }
+            refreshTokenExpiresAt: token.refreshTokenExpiresAt,
         };
     }
 
@@ -87,7 +83,16 @@ class AuthService {
         // 1. ค้นหา session จาก refresh token
         const session = await prisma.session.findUnique({
             where: { refreshToken: refreshToken },
-            include: { user: true }
+            include: {
+                user: {
+                    select: {
+                        ...prismaSelectDefault.user,
+                        employee: {
+                            select: prismaSelectDefault.employee,
+                        },
+                    }
+                }
+            }
         });
 
         if (!session) {
@@ -110,7 +115,7 @@ class AuthService {
         const token = this._generateToken();
 
         // 5. อัปเดต session (rotate refresh token)
-        const updatedSession = await prisma.session.update({
+        await prisma.session.update({
             where: { id: session.id },
             data: {
                 token: token.accessToken,
@@ -125,8 +130,8 @@ class AuthService {
             userId: session.user.id,
             username: session.user.username,
             role: session.user.role,
+            name: session.user.employee ? `${session.user.employee.firstName} ${session.user.employee.lastName}` : null,
             employeeId: session.user.employeeId,
-            sessionId: updatedSession.id
         }));
 
         // 7. ลบ access token เก่าออกจาก Redis (ถ้ามี)
@@ -168,7 +173,8 @@ class AuthService {
         const newAccessTokenExpiresAt = new Date();
         const newRefreshTokenExpiresAt = new Date();
 
-        newAccessTokenExpiresAt.setHours(newAccessTokenExpiresAt.getHours() + 1); // +1 hour
+        // newAccessTokenExpiresAt.setHours(newAccessTokenExpiresAt.getHours() + 1); // +1 hour
+        newAccessTokenExpiresAt.setMinutes(newAccessTokenExpiresAt.getMinutes() + 1); // +1 minute
         newRefreshTokenExpiresAt.setDate(newRefreshTokenExpiresAt.getDate() + 7); // +7 days
 
         return {
