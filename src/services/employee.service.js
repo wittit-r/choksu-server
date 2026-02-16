@@ -17,7 +17,7 @@ class EmployeeService {
             ];
         }
 
-        if (query.isActive) {
+        if (query.isActive !== undefined) {
             where.isActive = query.isActive;
         }
 
