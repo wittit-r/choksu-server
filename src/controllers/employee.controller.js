@@ -11,7 +11,7 @@ class EmployeeController {
                 page: Joi.number().integer().default(1),
                 limit: Joi.number().integer().default(10),
                 sort: Joi.string().valid('asc', 'desc').default('asc'),
-                sortBy: Joi.string().valid('name', 'email', 'createdAt').default('createdAt'),
+                sortBy: Joi.string().valid('name', 'email', 'createdAt').default('id'),
             }),
         )
 
@@ -104,7 +104,7 @@ class EmployeeController {
                 page: Joi.number().integer().default(1),
                 limit: Joi.number().integer().default(10),
                 sort: Joi.string().valid('asc', 'desc').default('asc'),
-                sortBy: Joi.string().valid('username', 'role', 'createdAt').default('createdAt'),
+                sortBy: Joi.string().valid('username', 'role', 'createdAt').default('id'),
             })
         );
 
