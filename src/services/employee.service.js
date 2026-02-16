@@ -112,32 +112,32 @@ class EmployeeService {
         return updated;
     }
 
-    async getEmployeeUsers({ employeeId, page, limit, sort, sortBy, username, role, isActive }) {
+    async getEmployeeUsers({ page, limit, sort, sortBy, ...query }) {
         // ตรวจสอบว่า employee มีอยู่จริง
         const employee = await prisma.employee.findUnique({
-            where: { id: employeeId },
+            where: { id: query.employeeId },
             select: { id: true },
         });
 
         if (!employee) {
-            throw err.notFound({ employeeId });
+            throw err.notFound({ employeeId:query.employeeId });
         }
 
         const where = {
-            employeeId,
+            employeeId: query.employeeId,
             isDeleted: false,
         };
 
-        if (username) {
-            where.username = { contains: username, mode: 'insensitive' };
+        if (query.username) {
+            where.username = { contains: query.username, mode: 'insensitive' };
         }
 
-        if (role) {
-            where.role = role;
+        if (query.role) {
+            where.role = query.role;
         }
 
-        if (isActive !== undefined) {
-            where.isActive = isActive;
+        if (query.isActive !== undefined) {
+            where.isActive = query.isActive;
         }
 
         const [ users, total ] = await Promise.all([
