@@ -1,0 +1,60 @@
+// เรทจ่าย (ผูกกับคนงานแต่ละคน + ช่วงเวลา)
+model WageRate {
+    id              Int             @id @default(autoincrement())
+    employeeId      Int             @map("employee_id")
+    positionId      Int             @map("position_id")
+
+    // Worker rates
+    dailyRate       Decimal         @map("daily_rate") @db.Decimal(12, 3)
+    hourlyRate      Decimal         @map("hourly_rate") @db.Decimal(12, 3)
+    minuteRate      Decimal         @map("minute_rate") @db.Decimal(12, 3)
+
+    // Driver rates
+    monthlyRate     Decimal         @map("monthly_rate") @db.Decimal(12, 3)
+
+    // ช่วงเวลา
+    effectiveFrom   DateTime        @map("effective_from")
+    effectiveTo     DateTime?       @map("effective_to")   // null = ยังใช้อยู่
+
+    note            String?         @map("note")
+
+    createdAt       DateTime        @default(now()) @map("created_at")
+    updatedAt       DateTime?       @updatedAt @map("updated_at")
+
+    // relations
+    employee        Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+    position        Position        @relation(fields: [positionId], references: [id])
+
+    @@index([employeeId])
+    @@index([positionId])
+    @@index([effectiveFrom])
+    @@index([effectiveTo])
+    @@map("wage_rates")
+}
+
+// เรทเบิก (ผูกกับสัญญา + ตำแหน่ง)
+model BillRate {
+    id              Int             @id @default(autoincrement())
+    contractId      Int             @map("contract_id")
+    positionId      Int             @map("position_id")
+
+    // Worker rates
+    dailyRate       Decimal         @map("daily_rate") @db.Decimal(12, 3)
+    hourlyRate      Decimal         @map("hourly_rate") @db.Decimal(12, 3)
+    minuteRate      Decimal         @map("minute_rate") @db.Decimal(12, 3)
+
+    // Driver rates
+    monthlyRate     Decimal         @map("monthly_rate") @db.Decimal(12, 3)
+
+    createdAt       DateTime        @default(now()) @map("created_at")
+    updatedAt       DateTime?       @updatedAt @map("updated_at")
+
+    // relations
+    contract        Contract        @relation(fields: [contractId], references: [id])
+    position        Position        @relation(fields: [positionId], references: [id])
+
+    @@unique([contractId, positionId])  // 1 contract + 1 position = 1 bill_rate
+    @@index([contractId])
+    @@index([positionId])
+    @@map("bill_rates")
+}

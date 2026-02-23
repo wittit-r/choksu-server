@@ -1,19 +1,39 @@
+// คนงาน (แยกอิสระจาก User)
 model Employee {
-    id              Int         @id @default(autoincrement())
+    id              Int             @id @default(autoincrement())
 
-    firstName       String      @map("first_name")
-    lastName        String      @map("last_name")
-    idCard          String      @map("id_card")
-    phone           String      @map("phone")
+    // ข้อมูลส่วนตัว
+    firstName       String          @map("first_name")
+    lastName        String          @map("last_name")
+    idCard          String          @unique @map("id_card")
+    phone           String?         @map("phone")
+    bankAccount     String?         @map("bank_account")
 
-    isActive        Boolean     @default(true) @map("is_active")
+    // ประเภทและตำแหน่ง
+    employeeType    EmployeeType    @map("employee_type")
+    shiftType       ShiftType       @map("shift_type")
+    positionId      Int             @map("position_id")
+    workLeaderId    Int             @map("work_leader_id")
 
-    createdAt       DateTime    @default(now()) @map("created_at")
-    updatedAt       DateTime    @updatedAt @map("updated_at")
+    // วันที่
+    startDate       DateTime        @map("start_date")
 
-    // map relational
-    users           User[]
+    // สถานะ
+    isActive        Boolean         @default(true) @map("is_active")
 
-    @@map("employees")
+    createdAt       DateTime        @default(now()) @map("created_at")
+    updatedAt       DateTime?       @updatedAt @map("updated_at")
+
+    // relations
+    position        Position        @relation(fields: [positionId], references: [id])
+    workLeader      WorkLeader      @relation(fields: [workLeaderId], references: [id])
+    wageRates       WageRate[]
+    timeEntries     TimeEntry[]
+    payrolls        Payroll[]
+
+    @@index([employeeType])
+    @@index([positionId])
+    @@index([workLeaderId])
     @@index([isActive])
+    @@map("employees")
 }
