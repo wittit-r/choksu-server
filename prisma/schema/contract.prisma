@@ -1,0 +1,27 @@
+// ประเภทสัญญา
+enum ContractType {
+    WORKER    // สัญญาคนงาน
+    DRIVER    // สัญญาคนขับรถ
+}
+
+// สัญญาจ้าง (แยกตามประเภท worker/driver)
+model Contract {
+    id              Int             @id @default(autoincrement())
+    contractNo      String          @unique @map("contract_no")
+    location        String?         @map("location")
+    contractType    ContractType    @map("contract_type")
+    startDate       DateTime        @map("start_date")
+    endDate         DateTime        @map("end_date")
+
+    createdAt       DateTime        @default(now()) @map("created_at")
+    updatedAt       DateTime?       @updatedAt @map("updated_at")
+
+    // relations
+    billRates       BillRate[]
+    invoicePeriods  InvoicePeriod[]
+
+    @@index([contractType])
+    @@index([startDate])
+    @@index([endDate])
+    @@map("contracts")
+}

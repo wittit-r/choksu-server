@@ -1,0 +1,86 @@
+// ============================================
+// ระบบใบเรียกเก็บเงิน (Invoice System)
+// ============================================
+
+// สถานะรอบเรียกเก็บ
+enum InvoiceStatus {
+    DRAFT      // ร่าง
+    RECEIVED   // ได้รับเงินแล้ว
+    CANCELLED  // ยกเลิก
+}
+
+// รอบเรียกเก็บ (1 branch + 1 period + 1 contract)
+model InvoicePeriod {
+    id              Int             @id @default(autoincrement())
+    periodNo        Int             @map("period_no")      // 1-24 (worker) หรือ 1-12 (driver)
+    year            Int             @map("year")
+    employeeType    EmployeeType    @map("employee_type")  // WORKER, DRIVER
+    branchId        Int             @map("branch_id")
+    contractId      Int             @map("contract_id")    // อ้างอิงสัญญาที่เบิก
+
+    startDate       DateTime        @map("start_date")
+    endDate         DateTime        @map("end_date")
+
+    // สถานะ (จ่ายทั้งรอบ ไม่มีจ่ายบางส่วน)
+    status          InvoiceStatus   @default(DRAFT) @map("status")
+    receivedDate    DateTime?       @map("received_date")  // วันที่ได้รับเงิน
+
+    createdAt       DateTime        @default(now()) @map("created_at")
+    updatedAt       DateTime?       @updatedAt @map("updated_at")
+
+    // relations
+    branch          Branch          @relation(fields: [branchId], references: [id])
+    contract        Contract        @relation(fields: [contractId], references: [id])
+    invoices        Invoice[]
+
+    @@unique([year, periodNo, employeeType, branchId, contractId])
+    @@index([year])
+    @@index([branchId])
+    @@index([contractId])
+    @@index([employeeType])
+    @@index([status])
+    @@map("invoice_periods")
+}
+
+// ใบเรียกเก็บหลัก (1 period + 1 work_leader = 1 invoice)
+model Invoice {
+    id                  Int             @id @default(autoincrement())
+    invoiceRef          String          @unique @map("invoice_ref")    // INV-2024-001
+    invoicePeriodId     Int             @map("invoice_period_id")
+    workLeaderId        Int             @map("work_leader_id")
+
+    // สรุปยอดเบิก
+    totalBillValue      Decimal         @default(0) @map("total_bill_value") @db.Decimal(12, 2)
+
+    note                String?         @map("note")
+
+    createdAt           DateTime        @default(now()) @map("created_at")
+    updatedAt           DateTime?       @updatedAt @map("updated_at")
+
+    // relations
+    invoicePeriod       InvoicePeriod   @relation(fields: [invoicePeriodId], references: [id])
+    workLeader          WorkLeader      @relation(fields: [workLeaderId], references: [id])
+    invoiceRelates      InvoiceRelate[]
+
+    @@index([invoicePeriodId])
+    @@index([workLeaderId])
+    @@map("invoices")
+}
+
+// ความสัมพันธ์ Invoice-TimeEntry (ติดตามว่า time_entry ไหนถูกเบิกแล้ว)
+model InvoiceRelate {
+    id              Int         @id @default(autoincrement())
+    invoiceId       Int         @map("invoice_id")
+    timeEntryId     Int         @map("time_entry_id")
+
+    createdAt       DateTime    @default(now()) @map("created_at")
+
+    // relations
+    invoice         Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+    timeEntry       TimeEntry   @relation(fields: [timeEntryId], references: [id])
+
+    @@unique([timeEntryId])  // TimeEntry เบิกได้ครั้งเดียว
+    @@index([invoiceId])
+    @@index([timeEntryId])
+    @@map("invoice_relates")
+}

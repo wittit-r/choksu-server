@@ -1,0 +1,81 @@
+// สถานะใบเซ็นชื่อ
+enum TimeSheetStatus {
+    PENDING   // รอกรอก
+    FILLED    // กรอกแล้ว
+    LOCKED    // ล็อคแล้ว
+}
+
+// ประเภทการทำงานใน TimeEntry
+enum WorkType {
+    REGULAR       // เวลาปกติ
+    OVERTIME      // ทำงานล่วงเวลา
+    ACCOMMODATION // ค่าที่พัก
+}
+
+// ใบเซ็นชื่อ (1 หัวหน้างาน + 1 วัน = 1 ใบ)
+model TimeSheet {
+    id              Int             @id @default(autoincrement())
+    workLeaderId    Int             @map("work_leader_id")
+    workDate        DateTime        @map("work_date")      // วันทำงาน
+    status          TimeSheetStatus @default(PENDING) @map("status")
+    createBy        Int             @map("create_by")      // user ที่สร้าง
+
+    createdAt       DateTime        @default(now()) @map("created_at")
+    updatedAt       DateTime?       @updatedAt @map("updated_at")
+
+    // relations
+    workLeader      WorkLeader      @relation(fields: [workLeaderId], references: [id])
+    creator         User            @relation(fields: [createBy], references: [id])
+    timeEntries     TimeEntry[]
+
+    @@unique([workLeaderId, workDate])  // 1 หัวหน้า + 1 วัน = 1 ใบ
+    @@index([workLeaderId])
+    @@index([workDate])
+    @@index([status])
+    @@map("time_sheets")
+}
+
+// รายการเวลา (1 วันของคนงานอาจมีหลาย records: regular, OT, accommodation)
+// Note: มี shiftType เพราะคนงานปกติ (regular) อาจถูกดึงไปทำกะได้ (0.00-8.00)
+model TimeEntry {
+    id              Int             @id @default(autoincrement())
+    timeSheetId     Int             @map("time_sheet_id")
+    employeeId      Int             @map("employee_id")
+
+    // เวลาทำงาน
+    startTime       DateTime        @map("start_time")
+    endTime         DateTime        @map("end_time")
+    shiftType       ShiftType       @map("shift_type")     // REGULAR, SHIFT - ระบุว่าทำงานแบบไหนในวันนั้น
+    workType        WorkType        @map("work_type")      // REGULAR, OVERTIME, ACCOMMODATION
+    otRate          Int             @default(0) @map("ot_rate")    // ตัวคูณ OT (1, 1.5, 2, ...)
+    accommodation   Decimal         @default(0) @map("accommodation") @db.Decimal(12, 2)  // ค่าที่พัก
+
+    // สถานะ
+    isNegative      Boolean         @default(false) @map("is_negative")  // รายการติดลบ
+    lockFlag        Boolean         @default(false) @map("lock_flag")
+
+    // ยอดที่จ่าย (snapshot)
+    paidValue       Decimal?        @map("paid_value") @db.Decimal(12, 2)
+    paidDate        DateTime?       @map("paid_date")
+
+    // วันที่เบิก
+    billDate        DateTime?       @map("bill_date")
+
+    note            String?         @map("note")
+
+    createdAt       DateTime        @default(now()) @map("created_at")
+    updatedAt       DateTime?       @updatedAt @map("updated_at")
+
+    // relations
+    timeSheet       TimeSheet       @relation(fields: [timeSheetId], references: [id], onDelete: Cascade)
+    employee        Employee        @relation(fields: [employeeId], references: [id])
+    payrollRelates  PayrollRelate[]
+    invoiceRelates  InvoiceRelate[]
+
+    @@index([timeSheetId])
+    @@index([employeeId])
+    @@index([shiftType])
+    @@index([workType])
+    @@index([lockFlag])
+    @@map("time_entries")
+}

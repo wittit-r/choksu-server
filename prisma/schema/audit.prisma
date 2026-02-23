@@ -1,0 +1,21 @@
+// บันทึกการเปลี่ยนแปลงข้อมูล (Audit Trail)
+model AuditLog {
+    id              Int             @id @default(autoincrement())
+    tableName       String          @map("table_name")
+    recordId        Int             @map("record_id")
+    action          String          @map("action")          // INSERT, UPDATE, DELETE
+    oldValues       Json?           @map("old_values")
+    newValues       Json?           @map("new_values")
+    changedBy       Int             @map("changed_by")
+
+    changedAt       DateTime        @default(now()) @map("changed_at")
+
+    // relations
+    user            User            @relation(fields: [changedBy], references: [id])
+
+    @@index([tableName])
+    @@index([recordId])
+    @@index([changedBy])
+    @@index([changedAt])
+    @@map("audit_logs")
+}

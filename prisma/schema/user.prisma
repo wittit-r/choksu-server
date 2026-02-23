@@ -1,59 +1,63 @@
 enum UserRole {
-    SUPER_ADMIN        // Owner ของระบบ (ไม่ต้องมี employee)
-    SENOIR_ACCOUNTING  // หัวหน้าฝ่ายการเงิน (ต้องเป็น employee)
-    ACCOUNTING         // ฝ่ายการเงิน (ต้องเป็น employee)
-    COORDINATOR        // ตัวแทนประสานงาน (ต้องเป็น employee)
+    SUPER_ADMIN        // Owner ของระบบ
+    SENOIR_ACCOUNTING  // หัวหน้าฝ่ายการเงิน
+    ACCOUNTING         // ฝ่ายการเงิน
+    COORDINATOR        // ตัวแทนประสานงาน
 }
 
 model User {
-    id              Int         @id @default(autoincrement())
-    employeeId      Int?        @map("employee_id")  // null สำหรับ SUPER_ADMIN
+    id              Int             @id @default(autoincrement())
 
     // authen
-    username        String      @unique @map("username")
-    passwordHash    String      @map("password_hash")
-    role            UserRole    @default(ACCOUNTING) @map("role")
+    username        String          @unique @map("username")
+    passwordHash    String          @map("password_hash")
+    role            UserRole        @default(ACCOUNTING) @map("role")
+
+    // branch (null สำหรับ role ที่ไม่ได้ผูก branch)
+    branchId        Int?            @map("branch_id")
 
     // status
-    isActive        Boolean     @default(true) @map("is_active")
-    isDeleted       Boolean     @default(false) @map("is_deleted")
+    isActive        Boolean         @default(true) @map("is_active")
+    isDeleted       Boolean         @default(false) @map("is_deleted")
 
-    createdAt       DateTime    @default(now()) @map("created_at")
-    updatedAt       DateTime?   @updatedAt @map("updated_at")
-    lastLoginAt     DateTime?   @map("last_login_at")
+    createdAt       DateTime        @default(now()) @map("created_at")
+    updatedAt       DateTime?       @updatedAt @map("updated_at")
+    lastLoginAt     DateTime?       @map("last_login_at")
 
-    // map relational
-    employee        Employee?   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+    // relations
+    branch          Branch?         @relation(fields: [branchId], references: [id])
     sessions        Session[]
+    timeSheets      TimeSheet[]     // ใบเซ็นชื่อที่สร้าง
+    auditLogs       AuditLog[]      // audit logs
 
-    @@map("users")
-    @@index([employeeId])
+    @@index([branchId])
     @@index([username])
     @@index([isActive])
+    @@map("users")
 }
 
 model Session {
-    id              Int         @id @default(autoincrement())
-    userId          Int         @map("user_id")
+    id                  Int             @id @default(autoincrement())
+    userId              Int             @map("user_id")
 
     // token
-    token           String      @unique @map("token")          // JWT
-    refreshToken    String      @unique @map("refresh_token")  // random
+    token               String          @unique @map("token")            // JWT
+    refreshToken        String          @unique @map("refresh_token")    // random
 
     // Token expiration times
-    accessExpiresAt DateTime    @map("access_expires_at")  // Access token expiration (1 hour)
-    refreshExpiresAt DateTime   @map("refresh_expires_at") // Refresh token expiration (7 days)
+    accessExpiresAt     DateTime        @map("access_expires_at")        // Access token expiration (1 hour)
+    refreshExpiresAt    DateTime        @map("refresh_expires_at")       // Refresh token expiration (7 days)
 
-    createdAt       DateTime    @default(now()) @map("created_at")
-    updatedAt       DateTime?   @updatedAt @map("updated_at")
+    createdAt           DateTime        @default(now()) @map("created_at")
+    updatedAt           DateTime?       @updatedAt @map("updated_at")
 
     // map relational
-    user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+    user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-    @@map("sessions")
     @@index([userId])
     @@index([token])
     @@index([refreshToken])
     @@index([accessExpiresAt])
     @@index([refreshExpiresAt])
+    @@map("sessions")
 }
