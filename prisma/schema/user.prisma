@@ -7,6 +7,9 @@ enum UserRole {
 
 model User {
     id              Int             @id @default(autoincrement())
+    firstName       String          @map("first_name")
+    lastName        String          @map("last_name")
+    phone           String?         @map("phone")
 
     // authen
     username        String          @unique @map("username")
