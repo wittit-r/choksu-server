@@ -9,7 +9,8 @@ export default {
     },
     user: {
         id: true,
-        employeeId: true,
+        firstName: true,
+        lastName: true,
         username: true,
         role: true,
         isActive: true,

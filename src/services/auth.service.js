@@ -3,7 +3,6 @@ import crypto from 'crypto';
 import prisma from '../databases/prisma.js';
 import redis from '../databases/redis.js';
 import err from '../utils/error.js';
-import prismaSelectDefault from '../utils/prismaSelectDefault.js';
 import { comparePassword } from '../utils/password.js';
 
 // Redis Key Strategy: "auth:access:{userId}:{accessToken}"
@@ -18,7 +17,16 @@ class AuthService {
         // 1. ค้นหา user โดย username
         const user = await prisma.user.findUnique({
             where: { username },
-            include: { employee: true }
+            select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                username: true,
+                passwordHash: true,
+                role: true,
+                isActive: true,
+                isDeleted: true,
+            }
         });
 
         if (!user) {
@@ -56,8 +64,7 @@ class AuthService {
             userId: user.id,
             username: user.username,
             role: user.role,
-            name: user.employee ? `${user.employee.firstName} ${user.employee.lastName}` : null,
-            employeeId: user.employeeId,
+            name: `${user.firstName} ${user.lastName}`,
         }));
 
         // 7. อัปเดต lastLoginAt
@@ -86,10 +93,13 @@ class AuthService {
             include: {
                 user: {
                     select: {
-                        ...prismaSelectDefault.user,
-                        employee: {
-                            select: prismaSelectDefault.employee,
-                        },
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        username: true,
+                        role: true,
+                        isActive: true,
+                        isDeleted: true,
                     }
                 }
             }
@@ -130,8 +140,7 @@ class AuthService {
             userId: session.user.id,
             username: session.user.username,
             role: session.user.role,
-            name: session.user.employee ? `${session.user.employee.firstName} ${session.user.employee.lastName}` : null,
-            employeeId: session.user.employeeId,
+            name: `${session.user.firstName} ${session.user.lastName}`,
         }));
 
         // 7. ลบ access token เก่าออกจาก Redis (ถ้ามี)

@@ -67,7 +67,7 @@ const auth = async (req, res, next) => {
             userId: session.user.id,
             username: session.user.username,
             role: session.user.role,
-            employeeId: session.user.employeeId,
+            name: `${session.user.firstName} ${session.user.lastName}`,
             sessionId: session.id
         };
 

@@ -1,15 +1,3 @@
-/*
-  Warnings:
-
-  - You are about to drop the column `employee_id` on the `users` table. All the data in the column will be lost.
-  - A unique constraint covering the columns `[id_card]` on the table `employees` will be added. If there are existing duplicate values, this will fail.
-  - Added the required column `employee_type` to the `employees` table without a default value. This is not possible if the table is not empty.
-  - Added the required column `position_id` to the `employees` table without a default value. This is not possible if the table is not empty.
-  - Added the required column `shift_type` to the `employees` table without a default value. This is not possible if the table is not empty.
-  - Added the required column `start_date` to the `employees` table without a default value. This is not possible if the table is not empty.
-  - Added the required column `work_leader_id` to the `employees` table without a default value. This is not possible if the table is not empty.
-
-*/
 -- CreateEnum
 CREATE TYPE "ContractType" AS ENUM ('WORKER', 'DRIVER');
 
@@ -34,25 +22,8 @@ CREATE TYPE "TimeSheetStatus" AS ENUM ('PENDING', 'FILLED', 'LOCKED');
 -- CreateEnum
 CREATE TYPE "WorkType" AS ENUM ('REGULAR', 'OVERTIME', 'ACCOMMODATION');
 
--- DropForeignKey
-ALTER TABLE "users" DROP CONSTRAINT "users_employee_id_fkey";
-
--- DropIndex
-DROP INDEX "users_employee_id_idx";
-
--- AlterTable
-ALTER TABLE "employees" ADD COLUMN     "bank_account" TEXT,
-ADD COLUMN     "employee_type" "EmployeeType" NOT NULL,
-ADD COLUMN     "position_id" INTEGER NOT NULL,
-ADD COLUMN     "shift_type" "ShiftType" NOT NULL,
-ADD COLUMN     "start_date" TIMESTAMP(3) NOT NULL,
-ADD COLUMN     "work_leader_id" INTEGER NOT NULL,
-ALTER COLUMN "updated_at" DROP NOT NULL,
-ALTER COLUMN "phone" DROP NOT NULL;
-
--- AlterTable
-ALTER TABLE "users" DROP COLUMN "employee_id",
-ADD COLUMN     "branch_id" INTEGER;
+-- CreateEnum
+CREATE TYPE "UserRole" AS ENUM ('SUPER_ADMIN', 'SENOIR_ACCOUNTING', 'ACCOUNTING', 'COORDINATOR');
 
 -- CreateTable
 CREATE TABLE "audit_logs" (
@@ -90,6 +61,26 @@ CREATE TABLE "contracts" (
     "updated_at" TIMESTAMP(3),
 
     CONSTRAINT "contracts_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "employees" (
+    "id" SERIAL NOT NULL,
+    "first_name" TEXT NOT NULL,
+    "last_name" TEXT NOT NULL,
+    "id_card" TEXT NOT NULL,
+    "phone" TEXT,
+    "bank_account" TEXT,
+    "employee_type" "EmployeeType" NOT NULL,
+    "shift_type" "ShiftType" NOT NULL,
+    "position_id" INTEGER NOT NULL,
+    "work_leader_id" INTEGER NOT NULL,
+    "start_date" TIMESTAMP(3) NOT NULL,
+    "is_active" BOOLEAN NOT NULL DEFAULT true,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3),
+
+    CONSTRAINT "employees_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -263,6 +254,39 @@ CREATE TABLE "time_entries" (
 );
 
 -- CreateTable
+CREATE TABLE "users" (
+    "id" SERIAL NOT NULL,
+    "first_name" TEXT NOT NULL,
+    "last_name" TEXT NOT NULL,
+    "phone" TEXT,
+    "username" TEXT NOT NULL,
+    "password_hash" TEXT NOT NULL,
+    "role" "UserRole" NOT NULL DEFAULT 'ACCOUNTING',
+    "branch_id" INTEGER,
+    "is_active" BOOLEAN NOT NULL DEFAULT true,
+    "is_deleted" BOOLEAN NOT NULL DEFAULT false,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3),
+    "last_login_at" TIMESTAMP(3),
+
+    CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "sessions" (
+    "id" SERIAL NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "token" TEXT NOT NULL,
+    "refresh_token" TEXT NOT NULL,
+    "access_expires_at" TIMESTAMP(3) NOT NULL,
+    "refresh_expires_at" TIMESTAMP(3) NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3),
+
+    CONSTRAINT "sessions_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "work_leaders" (
     "id" SERIAL NOT NULL,
     "name" TEXT NOT NULL,
@@ -298,6 +322,21 @@ CREATE INDEX "contracts_start_date_idx" ON "contracts"("start_date");
 
 -- CreateIndex
 CREATE INDEX "contracts_end_date_idx" ON "contracts"("end_date");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "employees_id_card_key" ON "employees"("id_card");
+
+-- CreateIndex
+CREATE INDEX "employees_employee_type_idx" ON "employees"("employee_type");
+
+-- CreateIndex
+CREATE INDEX "employees_position_id_idx" ON "employees"("position_id");
+
+-- CreateIndex
+CREATE INDEX "employees_work_leader_id_idx" ON "employees"("work_leader_id");
+
+-- CreateIndex
+CREATE INDEX "employees_is_active_idx" ON "employees"("is_active");
 
 -- CreateIndex
 CREATE INDEX "invoice_periods_year_idx" ON "invoice_periods"("year");
@@ -429,25 +468,43 @@ CREATE INDEX "time_entries_work_type_idx" ON "time_entries"("work_type");
 CREATE INDEX "time_entries_lock_flag_idx" ON "time_entries"("lock_flag");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "users_username_key" ON "users"("username");
+
+-- CreateIndex
+CREATE INDEX "users_branch_id_idx" ON "users"("branch_id");
+
+-- CreateIndex
+CREATE INDEX "users_username_idx" ON "users"("username");
+
+-- CreateIndex
+CREATE INDEX "users_is_active_idx" ON "users"("is_active");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "sessions_token_key" ON "sessions"("token");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "sessions_refresh_token_key" ON "sessions"("refresh_token");
+
+-- CreateIndex
+CREATE INDEX "sessions_user_id_idx" ON "sessions"("user_id");
+
+-- CreateIndex
+CREATE INDEX "sessions_token_idx" ON "sessions"("token");
+
+-- CreateIndex
+CREATE INDEX "sessions_refresh_token_idx" ON "sessions"("refresh_token");
+
+-- CreateIndex
+CREATE INDEX "sessions_access_expires_at_idx" ON "sessions"("access_expires_at");
+
+-- CreateIndex
+CREATE INDEX "sessions_refresh_expires_at_idx" ON "sessions"("refresh_expires_at");
+
+-- CreateIndex
 CREATE INDEX "work_leaders_branch_id_idx" ON "work_leaders"("branch_id");
 
 -- CreateIndex
 CREATE INDEX "work_leaders_is_active_idx" ON "work_leaders"("is_active");
-
--- CreateIndex
-CREATE UNIQUE INDEX "employees_id_card_key" ON "employees"("id_card");
-
--- CreateIndex
-CREATE INDEX "employees_employee_type_idx" ON "employees"("employee_type");
-
--- CreateIndex
-CREATE INDEX "employees_position_id_idx" ON "employees"("position_id");
-
--- CreateIndex
-CREATE INDEX "employees_work_leader_id_idx" ON "employees"("work_leader_id");
-
--- CreateIndex
-CREATE INDEX "users_branch_id_idx" ON "users"("branch_id");
 
 -- AddForeignKey
 ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_changed_by_fkey" FOREIGN KEY ("changed_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -514,6 +571,9 @@ ALTER TABLE "time_entries" ADD CONSTRAINT "time_entries_employee_id_fkey" FOREIG
 
 -- AddForeignKey
 ALTER TABLE "users" ADD CONSTRAINT "users_branch_id_fkey" FOREIGN KEY ("branch_id") REFERENCES "branches"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "work_leaders" ADD CONSTRAINT "work_leaders_branch_id_fkey" FOREIGN KEY ("branch_id") REFERENCES "branches"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
