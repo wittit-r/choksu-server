@@ -5,6 +5,8 @@ export default {
         lastName: true,
         idCard: true,
         phone: true,
+        employeeType: true,
+        shiftType: true,
         isActive: true,
     },
     user: {
@@ -13,6 +15,23 @@ export default {
         lastName: true,
         username: true,
         role: true,
+        isActive: true,
+    },
+    wageRate: {
+        id: true,
+        dailyRate: true,
+        hourlyRate: true,
+        minuteRate: true,
+        monthlyRate: true,
+        effectiveFrom: true,
+        effectiveTo: true,
+        note: true,
+    },
+    position: {
+        id: true,
+        name: true,
+        code: true,
+        employeeType: true,
         isActive: true,
     }
 }

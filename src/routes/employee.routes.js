@@ -13,4 +13,9 @@ router.post("/", auth, wrap(employeeController.createEmployee));
 router.get("/:id", auth, wrap(employeeController.getEmployeeById));
 router.patch("/:id", auth, wrap(employeeController.updateEmployee));
 
+// Wage routes (nested under employee)
+router.get("/:employeeId/wages", auth, wrap(employeeController.getWages));
+router.post("/:employeeId/wages", auth, wrap(employeeController.createWage));
+router.patch("/:employeeId/wages/:id", auth, wrap(employeeController.updateWage));
+
 export default router;

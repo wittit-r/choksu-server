@@ -86,6 +86,100 @@ class EmployeeController {
             data: employee,
         });
     }
+
+    getWages = async (req, res) => {
+        const { employeeId } = validate(
+            req.params,
+            Joi.object({
+                employeeId: Joi.number().integer().required(),
+            })
+        );
+
+        const query = validate(
+            req.query,
+            Joi.object({
+                page: Joi.number().integer().default(1),
+                limit: Joi.number().integer().default(10),
+                sort: Joi.string().valid('asc', 'desc').default('asc'),
+                sortBy: Joi.string().valid('effectiveFrom', 'effectiveTo', 'createdAt').default('effectiveFrom'),
+            })
+        );
+
+        const { data, pagination } = await employeeService.getWagesByEmployeeId({
+            employeeId,
+            ...query,
+        });
+
+        res.status(200).json({
+            success: true,
+            data,
+            pagination,
+        });
+    }
+
+    createWage = async (req, res) => {
+        const { employeeId } = validate(
+            req.params,
+            Joi.object({
+                employeeId: Joi.number().integer().required(),
+            })
+        );
+
+        const body = validate(
+            req.body,
+            Joi.object({
+                positionId: Joi.number().integer().required(),
+                dailyRate: Joi.number().precision(3).min(0).required(),
+                hourlyRate: Joi.number().precision(3).min(0).required(),
+                minuteRate: Joi.number().precision(3).min(0).required(),
+                monthlyRate: Joi.number().precision(3).min(0).required(),
+                effectiveFrom: Joi.date().iso().required(),
+                effectiveTo: Joi.date().iso().allow(null),
+                note: Joi.string().allow(null, ''),
+            })
+        );
+
+        const wage = await employeeService.createWage({
+            employeeId,
+            ...body,
+        });
+
+        res.status(200).json({
+            success: true,
+            data: wage,
+        });
+    }
+
+    updateWage = async (req, res) => {
+        const { employeeId, id } = validate(
+            req.params,
+            Joi.object({
+                employeeId: Joi.number().integer().required(),
+                id: Joi.number().integer().required(),
+            })
+        );
+
+        const body = validate(
+            req.body,
+            Joi.object({
+                positionId: Joi.number().integer(),
+                dailyRate: Joi.number().precision(3).min(0),
+                hourlyRate: Joi.number().precision(3).min(0),
+                minuteRate: Joi.number().precision(3).min(0),
+                monthlyRate: Joi.number().precision(3).min(0),
+                effectiveFrom: Joi.date().iso(),
+                effectiveTo: Joi.date().iso().allow(null),
+                note: Joi.string().allow(null, ''),
+            }).min(1)
+        );
+
+        const wage = await employeeService.updateWage(id, employeeId, body);
+
+        res.status(200).json({
+            success: true,
+            data: wage,
+        });
+    }
 }
 
 export default new EmployeeController();
