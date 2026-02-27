@@ -9,9 +9,24 @@ import { comparePassword } from '../utils/password.js';
 const REDIS_ACCESS_PREFIX = 'auth:access:';
 const REDIS_ACCESS_TTL = 3600; // 1 hour (seconds)
 
+/**
+ * @typedef {Object} TokenResult
+ * @property {string} accessToken - Access token สำหรับ authentication
+ * @property {string} refreshToken - Refresh token สำหรับต่ออายุ session
+ * @property {Date} accessTokenExpiresAt - วันที่ access token หมดอายุ
+ * @property {Date} refreshTokenExpiresAt - วันที่ refresh token หมดอายุ
+ */
+
+/**
+ * Service สำหรับจัดการการ authentication และ authorization
+ */
 class AuthService {
     /**
      * Login - ตรวจสอบ username/password และสร้าง tokens
+     * @param {string} username - ชื่อผู้ใช้
+     * @param {string} password - รหัสผ่าน
+     * @returns {Promise<TokenResult>} Access token และ refresh token
+     * @throws {AppError} ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง หรือบัญชีถูกระงับ (unauthorized)
      */
     async login(username, password) {
         // 1. ค้นหา user โดย username
@@ -85,6 +100,9 @@ class AuthService {
     /**
      * Refresh Token - สร้าง access token และ refresh token ใหม่
      * Token Rotation: สร้าง refresh token ใหม่ทุกครั้ง
+     * @param {string} refreshToken - Refresh token เดิม
+     * @returns {Promise<TokenResult>} Access token และ refresh token ใหม่
+     * @throws {AppError} Refresh token ไม่ถูกต้องหรือหมดอายุ หรือบัญชีถูกระงับ (unauthorized)
      */
     async refreshAccessToken(refreshToken) {
         // 1. ค้นหา session จาก refresh token
@@ -158,6 +176,8 @@ class AuthService {
 
     /**
      * Logout - ลบ session และ invalidate tokens
+     * @param {string} accessToken - Access token ที่ต้องการ invalidate
+     * @returns {Promise<boolean>} สำเร็จจะคืนค่า true
      */
     async logout(accessToken) {
         // 1. ลบ access token ออกจาก Redis (ใช้ key pattern)
@@ -176,7 +196,9 @@ class AuthService {
     }
 
     /**
-     * generate token
+     * สร้าง access token และ refresh token ใหม่
+     * @private
+     * @returns {TokenResult} Token และวันหมดอายุ
      */
     _generateToken() {
         const newAccessTokenExpiresAt = new Date();
