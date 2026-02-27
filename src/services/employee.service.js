@@ -32,10 +32,31 @@ class EmployeeService {
             where.isActive = query.isActive;
         }
 
+        if (query.workLeaderId !== undefined) {
+            where.workLeaderId = query.workLeaderId;
+        }
+
+        if (query.branchId !== undefined) {
+            where.workLeader = {
+                branchId: query.branchId,
+            };
+        }
+
         const [ employees, total ] = await Promise.all([
             prisma.employee.findMany({
                 where,
-                select: prismaSelectDefault.employee,
+                select: {
+                    ...prismaSelectDefault.employee,
+                    workLeader: {
+                        select: {
+                            id: true,
+                            name: true,
+                            branch: {
+                                select: prismaSelectDefault.branch,
+                            }
+                        }
+                    }
+                },
                 skip: (page - 1) * limit,
                 take: limit,
                 orderBy: {
@@ -58,18 +79,38 @@ class EmployeeService {
         };
     }
 
-    async createEmployee({ firstName, lastName, idCard, phone }) {
+    async createEmployee({ firstName, lastName, idCard, phone, bankAccount, employeeType, shiftType, positionId, workLeaderId, startDate }) {
         const employee = await prisma.employee.create({
             data: {
                 firstName,
                 lastName,
                 idCard,
                 phone,
+                bankAccount,
+                employeeType,
+                shiftType,
+                positionId,
+                workLeaderId,
+                startDate: new Date(startDate),
             },
             select: {
                 ...prismaSelectDefault.employee,
+                bankAccount: true,
+                startDate: true,
                 createdAt: true,
                 updatedAt: true,
+                position: {
+                    select: prismaSelectDefault.position,
+                },
+                workLeader: {
+                    select: {
+                        id: true,
+                        name: true,
+                        branch: {
+                            select: prismaSelectDefault.branch,
+                        }
+                    }
+                },
             },
         });
         return employee;
@@ -80,8 +121,22 @@ class EmployeeService {
             where: { id },
             select: {
                 ...prismaSelectDefault.employee,
+                bankAccount: true,
+                startDate: true,
                 createdAt: true,
                 updatedAt: true,
+                position: {
+                    select: prismaSelectDefault.position,
+                },
+                workLeader: {
+                    select: {
+                        id: true,
+                        name: true,
+                        branch: {
+                            select: prismaSelectDefault.branch,
+                        }
+                    }
+                },
             },
         });
 
@@ -92,7 +147,7 @@ class EmployeeService {
         return employee;
     }
 
-    async updateEmployee(id, { firstName, lastName, idCard, phone, isActive }) {
+    async updateEmployee(id, { firstName, lastName, idCard, phone, bankAccount, employeeType, shiftType, positionId, workLeaderId, startDate, isActive }) {
         // ตรวจสอบว่ามี employee อยู่จริง
         const employee = await prisma.employee.findUnique({
             where: { id },
@@ -111,12 +166,32 @@ class EmployeeService {
                 ...(lastName !== undefined && { lastName }),
                 ...(idCard !== undefined && { idCard }),
                 ...(phone !== undefined && { phone }),
+                ...(bankAccount !== undefined && { bankAccount }),
+                ...(employeeType !== undefined && { employeeType }),
+                ...(shiftType !== undefined && { shiftType }),
+                ...(positionId !== undefined && { positionId }),
+                ...(workLeaderId !== undefined && { workLeaderId }),
+                ...(startDate !== undefined && { startDate }),
                 ...(isActive !== undefined && { isActive }),
             },
             select: {
                 ...prismaSelectDefault.employee,
+                bankAccount: true,
+                startDate: true,
                 createdAt: true,
                 updatedAt: true,
+                position: {
+                    select: prismaSelectDefault.position,
+                },
+                workLeader: {
+                    select: {
+                        id: true,
+                        name: true,
+                        branch: {
+                            select: prismaSelectDefault.branch,
+                        }
+                    }
+                },
             },
         });
 

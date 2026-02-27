@@ -8,10 +8,12 @@ class EmployeeController {
             Joi.object({
                 search: Joi.string(),
                 isActive: Joi.boolean(),
+                workLeaderId: Joi.number().integer(),
+                branchId: Joi.number().integer(),
                 page: Joi.number().integer().default(1),
                 limit: Joi.number().integer().default(10),
                 sort: Joi.string().valid('asc', 'desc').default('asc'),
-                sortBy: Joi.string().valid('name', 'email', 'createdAt').default('id'),
+                sortBy: Joi.string().valid('firstName', 'startDate', 'createdAt').default('id'),
             }),
         )
 
@@ -47,7 +49,13 @@ class EmployeeController {
                 firstName: Joi.string().required(),
                 lastName: Joi.string().required(),
                 idCard: Joi.string().required(),
-                phone: Joi.string().required(),
+                phone: Joi.string().allow(null, ''),
+                bankAccount: Joi.string().allow(null, ''),
+                employeeType: Joi.string().valid('WORKER', 'DRIVER').required(),
+                shiftType: Joi.string().valid('REGULAR', 'SHIFT').required(),
+                positionId: Joi.number().integer().required(),
+                workLeaderId: Joi.number().integer().required(),
+                startDate: Joi.date().iso().required(),
             }),
         );
 
@@ -74,7 +82,13 @@ class EmployeeController {
                 firstName: Joi.string().not(''),
                 lastName: Joi.string().not(''),
                 idCard: Joi.string().not(''),
-                phone: Joi.string().not(''),
+                phone: Joi.string().allow(null, ''),
+                bankAccount: Joi.string().allow(null, ''),
+                employeeType: Joi.string().valid('WORKER', 'DRIVER'),
+                shiftType: Joi.string().valid('REGULAR', 'SHIFT'),
+                positionId: Joi.number().integer(),
+                workLeaderId: Joi.number().integer(),
+                startDate: Joi.date().iso(),
                 isActive: Joi.boolean(),
             }).min(1) // ต้องส่งมาอย่างน้อย 1 ฟิลด์
         );

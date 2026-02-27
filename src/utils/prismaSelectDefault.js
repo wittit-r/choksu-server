@@ -3,7 +3,6 @@ export default {
         id: true,
         firstName: true,
         lastName: true,
-        idCard: true,
         phone: true,
         employeeType: true,
         shiftType: true,
