@@ -257,6 +257,7 @@ class EmployeeService {
             where: { id },
             select: {
                 ...prismaSelectDefault.employee,
+                idCard: true,
                 bankAccount: true,
                 startDate: true,
                 createdAt: true,
@@ -319,6 +320,7 @@ class EmployeeService {
             },
             select: {
                 ...prismaSelectDefault.employee,
+                idCard: true,
                 bankAccount: true,
                 startDate: true,
                 createdAt: true,
