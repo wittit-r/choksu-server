@@ -3,6 +3,19 @@ import err from "../utils/error.js";
 import prismaSelectDefault from "../utils/prismaSelectDefault.js";
 
 class EmployeeService {
+    async _validatePositionExists(positionId) {
+        const position = await prisma.position.findUnique({
+            where: { id: positionId },
+            select: { id: true },
+        });
+
+        if (!position) {
+            throw err.validation({ positionId: 'ไม่พบตำแหน่งงาน' });
+        }
+
+        return position;
+    }
+
     async getEmployees({ page, limit, sort, sortBy, ...query }) {
         const where = {};
 
@@ -168,14 +181,7 @@ class EmployeeService {
         }
 
         // ตรวจสอบ positionId มีอยู่จริง
-        const position = await prisma.position.findUnique({
-            where: { id: positionId },
-            select: { id: true },
-        });
-
-        if (!position) {
-            throw err.validation({ positionId: 'ไม่พบตำแหน่งงาน' });
-        }
+        await this._validatePositionExists(positionId);
 
         const wage = await prisma.wageRate.create({
             data: {
@@ -220,14 +226,7 @@ class EmployeeService {
 
         // ถ้ามี positionId ให้ตรวจสอบว่า position มีอยู่จริง
         if (positionId !== undefined) {
-            const position = await prisma.position.findUnique({
-                where: { id: positionId },
-                select: { id: true },
-            });
-
-            if (!position) {
-                throw err.validation({ positionId: 'ไม่พบตำแหน่งงาน' });
-            }
+            await this._validatePositionExists(positionId);
         }
 
         // ตรวจสอบ effectiveTo > effectiveFrom
