@@ -2,6 +2,7 @@ import express from "express";
 import authRoutes from "./auth.routes.js";
 import employeeRoutes from "./employee.routes.js";
 import userRoutes from "./user.routes.js";
+import positionRoutes from "./position.routes.js";
 
 const router = express.Router();
 
@@ -13,5 +14,8 @@ router.use('/employees', employeeRoutes);
 
 // User routes
 router.use('/users', userRoutes);
+
+// Position routes
+router.use('/positions', positionRoutes);
 
 export default router;
