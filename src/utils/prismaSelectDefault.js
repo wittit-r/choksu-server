@@ -33,5 +33,20 @@ export default {
         code: true,
         employeeType: true,
         isActive: true,
+    },
+    branch: {
+        id: true,
+        name: true,
+    },
+    workLeader: {
+        id: true,
+        name: true,
+        refNo: true,
+        branchId: true,
+        isActive: true,
+        branch: {
+            id: true,
+            name: true,
+        },
     }
 }
