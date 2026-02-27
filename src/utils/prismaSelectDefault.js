@@ -37,6 +37,7 @@ export default {
     branch: {
         id: true,
         name: true,
+        fullname: true,
     },
     workLeader: {
         id: true,
@@ -44,9 +45,5 @@ export default {
         refNo: true,
         branchId: true,
         isActive: true,
-    },
-    branch: {
-        id: true,
-        name: true,
     },
 }

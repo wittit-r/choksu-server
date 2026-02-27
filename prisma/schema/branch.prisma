@@ -2,6 +2,7 @@
 model Branch {
     id              Int             @id @default(autoincrement())
     name            String          @map("name")
+    fullname        String?         @map("fullname")
 
     createdAt       DateTime        @default(now()) @map("created_at")
     updatedAt       DateTime?       @updatedAt @map("updated_at")

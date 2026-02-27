@@ -10,7 +10,7 @@ class BranchController {
                 page: Joi.number().integer().default(1),
                 limit: Joi.number().integer().default(10),
                 sort: Joi.string().valid('asc', 'desc').default('asc'),
-                sortBy: Joi.string().valid('id', 'name', 'createdAt').default('id'),
+                sortBy: Joi.string().valid('id', 'name', 'fullname', 'createdAt').default('id'),
             }),
         );
 
@@ -28,6 +28,7 @@ class BranchController {
             req.body,
             Joi.object({
                 name: Joi.string().required(),
+                fullname: Joi.string().required(),
             }),
         );
 
@@ -51,6 +52,7 @@ class BranchController {
             req.body,
             Joi.object({
                 name: Joi.string(),
+                fullname: Joi.string(),
             }).min(1),
         );
 

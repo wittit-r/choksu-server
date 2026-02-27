@@ -9,6 +9,7 @@ class BranchService {
         if (query.search) {
             where.OR = [
                 { name: { contains: query.search, mode: 'insensitive' } },
+                { fullname: { contains: query.search, mode: 'insensitive' } },
             ];
         }
 
@@ -42,6 +43,7 @@ class BranchService {
         const branch = await prisma.branch.create({
             data: {
                 name: data.name,
+                fullname: data.fullname,
             },
             select: prismaSelectDefault.branch,
         });
@@ -62,6 +64,7 @@ class BranchService {
             where: { id },
             data: {
                 name: data.name,
+                fullname: data.fullname,
             },
             select: prismaSelectDefault.branch,
         });
