@@ -37,7 +37,12 @@ class WorkLeaderService {
         const [workLeaders, total] = await Promise.all([
             prisma.workLeader.findMany({
                 where,
-                select: prismaSelectDefault.workLeader,
+                select: {
+                    ...prismaSelectDefault.workLeader,
+                    branch: {
+                        select: prismaSelectDefault.branch,
+                    }
+                },
                 skip: (page - 1) * limit,
                 take: limit,
                 orderBy: {
@@ -70,7 +75,12 @@ class WorkLeaderService {
                 branchId: data.branchId,
                 isActive: data.isActive ?? true,
             },
-            select: prismaSelectDefault.workLeader,
+            select: {
+                ...prismaSelectDefault.workLeader,
+                branch: {
+                    select: prismaSelectDefault.branch,
+                }
+            },
         });
 
         return workLeader;
@@ -97,7 +107,12 @@ class WorkLeaderService {
                 branchId: data.branchId,
                 isActive: data.isActive,
             },
-            select: prismaSelectDefault.workLeader,
+            select: {
+                ...prismaSelectDefault.workLeader,
+                branch: {
+                    select: prismaSelectDefault.branch,
+                }
+            },
         });
 
         return updated;

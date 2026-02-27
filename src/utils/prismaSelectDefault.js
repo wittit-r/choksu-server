@@ -44,9 +44,9 @@ export default {
         refNo: true,
         branchId: true,
         isActive: true,
-        branch: {
-            id: true,
-            name: true,
-        },
-    }
+    },
+    branch: {
+        id: true,
+        name: true,
+    },
 }
