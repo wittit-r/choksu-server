@@ -4,7 +4,6 @@ export default {
         firstName: true,
         lastName: true,
         phone: true,
-        employeeType: true,
         shiftType: true,
         isActive: true,
     },

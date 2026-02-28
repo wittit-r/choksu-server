@@ -9,10 +9,8 @@ model Employee {
     phone           String?         @map("phone")
     bankAccount     String?         @map("bank_account")
 
-    // ประเภทและตำแหน่ง
-    employeeType    EmployeeType    @map("employee_type")
+    // ประเภทการทำงาน
     shiftType       ShiftType       @map("shift_type")
-    positionId      Int             @map("position_id")
     workLeaderId    Int             @map("work_leader_id")
 
     // วันที่
@@ -25,14 +23,11 @@ model Employee {
     updatedAt       DateTime?       @updatedAt @map("updated_at")
 
     // relations
-    position        Position        @relation(fields: [positionId], references: [id])
     workLeader      WorkLeader      @relation(fields: [workLeaderId], references: [id])
     wageRates       WageRate[]
     timeEntries     TimeEntry[]
     payrolls        Payroll[]
 
-    @@index([employeeType])
-    @@index([positionId])
     @@index([workLeaderId])
     @@index([isActive])
     @@map("employees")

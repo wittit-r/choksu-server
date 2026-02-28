@@ -26,7 +26,9 @@ model WageRate {
     position        Position        @relation(fields: [positionId], references: [id])
 
     @@index([employeeId])
+    @@index([employeeId, effectiveFrom])  // composite index สำหรับหา active wage
     @@index([positionId])
+    @@index([positionId, effectiveFrom])  // composite index สำหรับ filter by position
     @@index([effectiveFrom])
     @@index([effectiveTo])
     @@map("wage_rates")

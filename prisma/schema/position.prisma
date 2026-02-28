@@ -22,7 +22,6 @@ model Position {
     updatedAt       DateTime?       @updatedAt @map("updated_at")
 
     // relations
-    employees       Employee[]
     wageRates       WageRate[]
     billRates       BillRate[]
 

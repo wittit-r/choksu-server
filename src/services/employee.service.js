@@ -20,10 +20,8 @@ import prismaSelectDefault from "../utils/prismaSelectDefault.js";
  * @property {string} idCard - เลขบัตรประชาชน
  * @property {string} [phone] - เบอร์โทรศัพท์
  * @property {string} [bankAccount] - เลขบัญชีธนาคาร
- * @property {string} employeeType - ประเภทพนักงาน (GENERAL, DRIVER, AGENT, ACCOUNTANT)
  * @property {string} shiftType - ประเภทการทำงาน (REGULAR, SHIFT)
- * @property {string} positionId - ID ของตำแหน่งงาน
- * @property {Object} position - ข้อมูลตำแหน่งงาน
+ * @property {Object|null} position - ข้อมูลตำแหน่งงาน (ดึงจาก WageRate ที่ active, มี employeeType อยู่ข้างใน)
  * @property {string} [workLeaderId] - ID ของหัวหน้างาน
  * @property {Object} [workLeader] - ข้อมูลหัวหน้างาน
  * @property {Date} [startDate] - วันที่เริ่มงาน
@@ -56,9 +54,7 @@ import prismaSelectDefault from "../utils/prismaSelectDefault.js";
  * @property {string} idCard - เลขบัตรประชาชน
  * @property {string} [phone] - เบอร์โทรศัพท์
  * @property {string} [bankAccount] - เลขบัญชีธนาคาร
- * @property {string} employeeType - ประเภทพนักงาน
  * @property {string} shiftType - ประเภทการทำงาน
- * @property {string} positionId - ID ของตำแหน่งงาน
  * @property {string} [workLeaderId] - ID ของหัวหน้างาน
  * @property {string} startDate - วันที่เริ่มงาน (ISO string)
  */
@@ -70,9 +66,7 @@ import prismaSelectDefault from "../utils/prismaSelectDefault.js";
  * @property {string} [idCard] - เลขบัตรประชาชน
  * @property {string} [phone] - เบอร์โทรศัพท์
  * @property {string} [bankAccount] - เลขบัญชีธนาคาร
- * @property {string} [employeeType] - ประเภทพนักงาน
  * @property {string} [shiftType] - ประเภทการทำงาน
- * @property {string} [positionId] - ID ของตำแหน่งงาน
  * @property {string} [workLeaderId] - ID ของหัวหน้างาน
  * @property {string} [startDate] - วันที่เริ่มงาน (ISO string)
  * @property {boolean} [isActive] - สถานะการใช้งาน
@@ -108,6 +102,20 @@ import prismaSelectDefault from "../utils/prismaSelectDefault.js";
  */
 class EmployeeService {
     /**
+     * Transform employee data - flatten position from wageRates
+     * @private
+     * @param {Object} employee - Employee data ที่มี wageRates array
+     * @returns {Object} Employee data ที่มี position field แทน wageRates
+     */
+    _transformEmployee(employee) {
+        const { wageRates, ...rest } = employee;
+        return {
+            ...rest,
+            position: wageRates?.[0]?.position || null,
+        };
+    }
+
+    /**
      * ตรวจสอบว่าตำแหน่งงานมีอยู่จริง
      * @private
      * @param {string} positionId - Position ID (UUID)
@@ -138,10 +146,13 @@ class EmployeeService {
      * @param {boolean} [params.isActive] - กรองตามสถานะการใช้งาน
      * @param {string} [params.workLeaderId] - กรองตามหัวหน้างาน
      * @param {string} [params.branchId] - กรองตามสาขา
+     * @param {number} [params.positionId] - กรองตามตำแหน่งงาน (จาก WageRate ที่ active)
+     * @param {string} [params.employeeType] - กรองตามประเภทพนักงาน (จาก Position ที่ active)
      * @returns {Promise<PaginationResult>} รายการพนักงานพร้อม pagination
      */
     async getEmployees({ page, limit, sort, sortBy, ...query }) {
         const where = {};
+        const now = new Date();
 
         if (query.search) {
             where.OR = [
@@ -166,11 +177,40 @@ class EmployeeService {
             };
         }
 
+        // Filter by position (จาก WageRate ที่ active)
+        if (query.positionId !== undefined) {
+            where.wageRates = {
+                some: {
+                    positionId: query.positionId,
+                    effectiveFrom: { lte: now },
+                    OR: [
+                        { effectiveTo: null },
+                        { effectiveTo: { gte: now } },
+                    ],
+                },
+            };
+        }
+
+        // Filter by employeeType (จาก Position ผ่าน WageRate ที่ active)
+        if (query.employeeType !== undefined) {
+            where.wageRates = {
+                some: {
+                    position: { employeeType: query.employeeType },
+                    effectiveFrom: { lte: now },
+                    OR: [
+                        { effectiveTo: null },
+                        { effectiveTo: { gte: now } },
+                    ],
+                },
+            };
+        }
+
         const [ employees, total ] = await Promise.all([
             prisma.employee.findMany({
                 where,
                 select: {
                     ...prismaSelectDefault.employee,
+                    startDate: true,
                     workLeader: {
                         select: {
                             id: true,
@@ -179,7 +219,28 @@ class EmployeeService {
                                 select: prismaSelectDefault.branch,
                             }
                         }
-                    }
+                    },
+                    // ดึง position และ employeeType จาก wageRate ที่ active
+                    wageRates: {
+                        where: {
+                            effectiveFrom: { lte: now },
+                            OR: [
+                                { effectiveTo: null },
+                                { effectiveTo: { gte: now } },
+                            ],
+                        },
+                        select: {
+                            position: {
+                                select: {
+                                    id: true,
+                                    name: true,
+                                    employeeType: true,
+                                },
+                            },
+                        },
+                        take: 1,
+                        orderBy: { effectiveFrom: 'desc' },
+                    },
                 },
                 skip: (page - 1) * limit,
                 take: limit,
@@ -192,8 +253,11 @@ class EmployeeService {
             }),
         ]);
 
+        // Transform: flatten position from wageRates (employeeType อยู่ใน position)
+        const transformedEmployees = employees.map(emp => this._transformEmployee(emp));
+
         return {
-            data: employees,
+            data: transformedEmployees,
             pagination: {
                 page,
                 limit,
@@ -208,7 +272,7 @@ class EmployeeService {
      * @param {EmployeeCreateData} params - ข้อมูลพนักงานใหม่
      * @returns {Promise<Employee>} ข้อมูลพนักงานที่สร้างใหม่
      */
-    async createEmployee({ firstName, lastName, idCard, phone, bankAccount, employeeType, shiftType, positionId, workLeaderId, startDate }) {
+    async createEmployee({ firstName, lastName, idCard, phone, bankAccount, shiftType, workLeaderId, startDate }) {
         const employee = await prisma.employee.create({
             data: {
                 firstName,
@@ -216,9 +280,7 @@ class EmployeeService {
                 idCard,
                 phone,
                 bankAccount,
-                employeeType,
                 shiftType,
-                positionId,
                 workLeaderId,
                 startDate: new Date(startDate),
             },
@@ -228,9 +290,6 @@ class EmployeeService {
                 startDate: true,
                 createdAt: true,
                 updatedAt: true,
-                position: {
-                    select: prismaSelectDefault.position,
-                },
                 workLeader: {
                     select: {
                         id: true,
@@ -242,7 +301,8 @@ class EmployeeService {
                 },
             },
         });
-        return employee;
+
+        return this._transformEmployee(employee);
     }
 
     /**
@@ -262,9 +322,6 @@ class EmployeeService {
                 startDate: true,
                 createdAt: true,
                 updatedAt: true,
-                position: {
-                    select: prismaSelectDefault.position,
-                },
                 workLeader: {
                     select: {
                         id: true,
@@ -274,6 +331,27 @@ class EmployeeService {
                         }
                     }
                 },
+                // ดึง position และ employeeType จาก wageRate ที่ active
+                wageRates: {
+                    where: {
+                        effectiveFrom: { lte: new Date() },
+                        OR: [
+                            { effectiveTo: null },
+                            { effectiveTo: { gte: new Date() } },
+                        ],
+                    },
+                    select: {
+                        position: {
+                            select: {
+                                id: true,
+                                name: true,
+                                employeeType: true,
+                            },
+                        },
+                    },
+                    take: 1,
+                    orderBy: { effectiveFrom: 'desc' },
+                },
             },
         });
 
@@ -281,7 +359,7 @@ class EmployeeService {
             throw err.notFound({ id });
         }
 
-        return employee;
+        return this._transformEmployee(employee);
     }
 
     /**
@@ -291,7 +369,7 @@ class EmployeeService {
      * @returns {Promise<Employee>} ข้อมูลพนักงานที่อัปเดตแล้ว
      * @throws {AppError} ไม่พบพนักงาน (notFound)
      */
-    async updateEmployee(id, { firstName, lastName, idCard, phone, bankAccount, employeeType, shiftType, positionId, workLeaderId, startDate, isActive }) {
+    async updateEmployee(id, { firstName, lastName, idCard, phone, bankAccount, shiftType, workLeaderId, startDate, isActive }) {
         // ตรวจสอบว่ามี employee อยู่จริง
         const employee = await prisma.employee.findUnique({
             where: { id },
@@ -311,9 +389,7 @@ class EmployeeService {
                 ...(idCard !== undefined && { idCard }),
                 ...(phone !== undefined && { phone }),
                 ...(bankAccount !== undefined && { bankAccount }),
-                ...(employeeType !== undefined && { employeeType }),
                 ...(shiftType !== undefined && { shiftType }),
-                ...(positionId !== undefined && { positionId }),
                 ...(workLeaderId !== undefined && { workLeaderId }),
                 ...(startDate !== undefined && { startDate }),
                 ...(isActive !== undefined && { isActive }),
@@ -325,9 +401,6 @@ class EmployeeService {
                 startDate: true,
                 createdAt: true,
                 updatedAt: true,
-                position: {
-                    select: prismaSelectDefault.position,
-                },
                 workLeader: {
                     select: {
                         id: true,
@@ -337,10 +410,31 @@ class EmployeeService {
                         }
                     }
                 },
+                // ดึง position และ employeeType จาก wageRate ที่ active
+                wageRates: {
+                    where: {
+                        effectiveFrom: { lte: new Date() },
+                        OR: [
+                            { effectiveTo: null },
+                            { effectiveTo: { gte: new Date() } },
+                        ],
+                    },
+                    select: {
+                        position: {
+                            select: {
+                                id: true,
+                                name: true,
+                                employeeType: true,
+                            },
+                        },
+                    },
+                    take: 1,
+                    orderBy: { effectiveFrom: 'desc' },
+                },
             },
         });
 
-        return updated;
+        return this._transformEmployee(updated);
     }
 
     /**
