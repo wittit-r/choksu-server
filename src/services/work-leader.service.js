@@ -118,6 +118,31 @@ class WorkLeaderService {
     }
 
     /**
+     * ดึงข้อมูลหัวหน้างานตาม ID
+     * @param {Object} params - Parameters
+     * @param {number} params.id - WorkLeader ID
+     * @returns {Promise<WorkLeader>} ข้อมูลหัวหน้างาน
+     * @throws {AppError} ไม่พบหัวหน้างาน (notFound)
+     */
+    async getWorkLeaderById({ id }) {
+        const workLeader = await prisma.workLeader.findUnique({
+            where: { id },
+            select: {
+                ...prismaSelectDefault.workLeader,
+                branch: {
+                    select: prismaSelectDefault.branch,
+                }
+            },
+        });
+
+        if (!workLeader) {
+            throw err.notFound({ id });
+        }
+
+        return workLeader;
+    }
+
+    /**
      * สร้างหัวหน้างานใหม่
      * @param {WorkLeaderData} data - ข้อมูลหัวหน้างานใหม่
      * @returns {Promise<WorkLeader>} ข้อมูลหัวหน้างานที่สร้างใหม่
