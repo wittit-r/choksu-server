@@ -54,7 +54,7 @@ class EmployeeController {
                 phone: Joi.string().allow(null, ''),
                 bankAccount: Joi.string().allow(null, ''),
                 shiftType: Joi.string().valid('REGULAR', 'SHIFT').required(),
-                workLeaderId: Joi.number().integer().required(),
+                workLeaderId: Joi.number().integer().allow(null),  // nullable สำหรับ Driver
                 startDate: Joi.date().iso().required(),
             }),
         );
@@ -85,7 +85,7 @@ class EmployeeController {
                 phone: Joi.string().allow(null, ''),
                 bankAccount: Joi.string().allow(null, ''),
                 shiftType: Joi.string().valid('REGULAR', 'SHIFT'),
-                workLeaderId: Joi.number().integer(),
+                workLeaderId: Joi.number().integer().allow(null),  // nullable สำหรับ Driver
                 startDate: Joi.date().iso(),
                 isActive: Joi.boolean(),
             }).min(1) // ต้องส่งมาอย่างน้อย 1 ฟิลด์

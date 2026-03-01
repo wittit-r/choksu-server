@@ -11,7 +11,7 @@ model Employee {
 
     // ประเภทการทำงาน
     shiftType       ShiftType       @map("shift_type")
-    workLeaderId    Int             @map("work_leader_id")
+    workLeaderId    Int?            @map("work_leader_id")  // nullable สำหรับ Driver
 
     // วันที่
     startDate       DateTime        @map("start_date")
@@ -23,10 +23,12 @@ model Employee {
     updatedAt       DateTime?       @updatedAt @map("updated_at")
 
     // relations
-    workLeader      WorkLeader      @relation(fields: [workLeaderId], references: [id])
+    workLeader      WorkLeader?     @relation(fields: [workLeaderId], references: [id])
     wageRates       WageRate[]
     timeEntries     TimeEntry[]
+    timeSheets      TimeSheet[]     // Driver's monthly timesheets
     payrolls        Payroll[]
+    invoices        Invoice[]       // Driver's invoices
 
     @@index([workLeaderId])
     @@index([isActive])

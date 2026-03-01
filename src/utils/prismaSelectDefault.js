@@ -44,4 +44,12 @@ export default {
         branchId: true,
         isActive: true,
     },
+    timeSheet: {
+        id: true,
+        sheetType: true,
+        workDate: true,
+        monthPeriod: true,
+        status: true,
+        files: true,
+    },
 }
