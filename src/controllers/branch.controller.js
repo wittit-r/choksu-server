@@ -23,6 +23,22 @@ class BranchController {
         });
     };
 
+    getBranchById = async (req, res) => {
+        const { id } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+            })
+        );
+
+        const branch = await branchService.getBranchById({ id });
+
+        res.status(200).json({
+            success: true,
+            data: branch,
+        });
+    };
+
     createBranch = async (req, res) => {
         const body = validate(
             req.body,

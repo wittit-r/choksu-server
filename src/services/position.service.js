@@ -92,6 +92,26 @@ class PositionService {
     }
 
     /**
+     * ดึงข้อมูลตำแหน่งงานตาม ID
+     * @param {Object} params - Parameters
+     * @param {number} params.id - Position ID
+     * @returns {Promise<Position>} ข้อมูลตำแหน่งงาน
+     * @throws {AppError} ไม่พบตำแหน่งงาน (notFound)
+     */
+    async getPositionById({ id }) {
+        const position = await prisma.position.findUnique({
+            where: { id },
+            select: prismaSelectDefault.position,
+        });
+
+        if (!position) {
+            throw err.notFound({ id });
+        }
+
+        return position;
+    }
+
+    /**
      * สร้างตำแหน่งงานใหม่
      * @param {PositionData} data - ข้อมูลตำแหน่งงานใหม่
      * @returns {Promise<Position>} ข้อมูลตำแหน่งงานที่สร้างใหม่

@@ -25,6 +25,22 @@ class PositionController {
         });
     };
 
+    getPositionById = async (req, res) => {
+        const { id } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+            })
+        );
+
+        const position = await positionService.getPositionById({ id });
+
+        res.status(200).json({
+            success: true,
+            data: position,
+        });
+    };
+
     createPosition = async (req, res) => {
         const body = validate(
             req.body,

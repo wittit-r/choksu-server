@@ -9,6 +9,7 @@ const router = express.Router();
  * /positions
  */
 router.get("/", auth, wrap(positionController.getPositions));
+router.get("/:id", auth, wrap(positionController.getPositionById));
 router.post("/", auth, wrap(positionController.createPosition));
 router.patch("/:id", auth, wrap(positionController.updatePosition));
 

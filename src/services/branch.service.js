@@ -78,6 +78,26 @@ class BranchService {
     }
 
     /**
+     * ดึงข้อมูลสาขาตาม ID
+     * @param {Object} params - Parameters
+     * @param {number} params.id - Branch ID
+     * @returns {Promise<Branch>} ข้อมูลสาขา
+     * @throws {AppError} ไม่พบสาขา (notFound)
+     */
+    async getBranchById({ id }) {
+        const branch = await prisma.branch.findUnique({
+            where: { id },
+            select: prismaSelectDefault.branch,
+        });
+
+        if (!branch) {
+            throw err.notFound({ id });
+        }
+
+        return branch;
+    }
+
+    /**
      * สร้างสาขาใหม่
      * @param {BranchData} data - ข้อมูลสาขาใหม่
      * @returns {Promise<Branch>} ข้อมูลสาขาที่สร้างใหม่

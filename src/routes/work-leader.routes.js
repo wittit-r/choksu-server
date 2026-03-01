@@ -9,6 +9,7 @@ const router = express.Router();
  * /work-leaders
  */
 router.get("/", auth, wrap(workLeaderController.getWorkLeaders));
+router.get("/:id", auth, wrap(workLeaderController.getWorkLeaderById));
 router.post("/", auth, wrap(workLeaderController.createWorkLeader));
 router.patch("/:id", auth, wrap(workLeaderController.updateWorkLeader));
 

@@ -9,6 +9,7 @@ const router = express.Router();
  * /branches
  */
 router.get("/", auth, wrap(branchController.getBranches));
+router.get("/:id", auth, wrap(branchController.getBranchById));
 router.post("/", auth, wrap(branchController.createBranch));
 router.patch("/:id", auth, wrap(branchController.updateBranch));
 

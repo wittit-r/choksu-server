@@ -25,6 +25,22 @@ class WorkLeaderController {
         });
     };
 
+    getWorkLeaderById = async (req, res) => {
+        const { id } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+            })
+        );
+
+        const workLeader = await workLeaderService.getWorkLeaderById({ id });
+
+        res.status(200).json({
+            success: true,
+            data: workLeader,
+        });
+    };
+
     createWorkLeader = async (req, res) => {
         const body = validate(
             req.body,
