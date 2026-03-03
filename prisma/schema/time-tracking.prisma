@@ -46,10 +46,7 @@ model TimeSheet {
     creator         User            @relation(fields: [createBy], references: [id])
     timeEntries     TimeEntry[]
 
-    // Unique constraints
-    @@unique([workLeaderId, workDate], name: "timesheet_worker_unique")
-    @@unique([employeeId, monthPeriod], name: "timesheet_driver_unique")
-
+    // Indexes
     @@index([workLeaderId])
     @@index([employeeId])
     @@index([workDate])
