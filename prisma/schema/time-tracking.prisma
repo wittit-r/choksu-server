@@ -65,7 +65,7 @@ model TimeEntry {
 
     // เวลาทำงาน
     startTime       DateTime        @map("start_time")
-    endTime         DateTime        @map("end_time")
+    endTime         DateTime?       @map("end_time")
     shiftType       ShiftType       @map("shift_type")     // REGULAR, SHIFT - ระบุว่าทำงานแบบไหนในวันนั้น
     workType        WorkType        @map("work_type")      // REGULAR, OVERTIME, ACCOMMODATION
     otRate          Int             @default(0) @map("ot_rate")    // ตัวคูณ OT (1, 1.5, 2, ...)
