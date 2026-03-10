@@ -1,12 +1,12 @@
 /**
- * รวม Date object กับ time string (HH:mm) เป็น DateTime
+ * รวม Date object กับ time string (HH:mm:ss) เป็น DateTime
  * @param {Date|string} date - Date object หรือ string YYYY-MM-DD
- * @param {string} timeStr - เวลาในรูปแบบ "HH:mm" (เวลาไทย)
+ * @param {string} timeStr - เวลาในรูปแบบ "HH:mm:ss" (เวลาไทย)
  * @returns {Date} DateTime object
  */
 const combineDateAndTime = (date, timeStr) => {
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    
+    const [hours, minutes, seconds] = timeStr.split(':').map(Number);
+
     // ถ้าเป็น string YYYY-MM-DD ให้แยกเอา
     let year, month, day;
     if (typeof date === 'string') {
@@ -19,14 +19,14 @@ const combineDateAndTime = (date, timeStr) => {
         day = date.getDate();
     }
 
-    // รองรับ 24:00 → เปลี่ยนเป็น 00:00 ของวันถัดไป
+    // รองรับ 24:00:00 → เปลี่ยนเป็น 00:00:00 ของวันถัดไป
     if (hours === 24) {
         const nextDay = new Date(year, month, day + 1);
-        return new Date(nextDay.getFullYear(), nextDay.getMonth(), nextDay.getDate(), 0, minutes, 0, 0);
+        return new Date(nextDay.getFullYear(), nextDay.getMonth(), nextDay.getDate(), 0, minutes, seconds, 0);
     }
-    
+
     // สร้าง Date ใหม่ด้วย local components (ไม่ใช้ setHours เพราะอาจมี side effect)
-    return new Date(year, month, day, hours, minutes, 0, 0);
+    return new Date(year, month, day, hours, minutes, seconds, 0);
 };
 
 export { combineDateAndTime };

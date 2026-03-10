@@ -19,6 +19,281 @@ import prismaSelectDefault from "../utils/prismaSelectDefault.js";
  * Service สำหรับจัดการใบเซ็นชื่อ
  */
 class TimeSheetService {
+    // ============================================
+    // Private Helper Methods
+    // ============================================
+
+    /**
+     * ตรวจสอบกฎของ workType
+     * - REGULAR: otRate=0, accommodation=0, requires timeIn/timeOut
+     * - OVERTIME: otRate>0, accommodation=0, requires timeIn/timeOut
+     * - ACCOMMODATION: otRate=0, accommodation>0, NO timeIn/timeOut
+     * @param {Object} data - ข้อมูลที่ต้องการ validate
+     * @param {Date|null} startTime - เวลาเริ่มต้น (null ถ้าไม่มี)
+     * @param {Date|null} endTime - เวลาสิ้นสุด (null ถ้าไม่มี)
+     * @throws {HttpError} ถ้าไม่ผ่าน validation
+     */
+    _validateWorkTypeRules(data, startTime, endTime) {
+        const workType = data.workType || 'REGULAR';
+        const otRate = data.otRate ?? 0;
+        const accommodation = data.accommodation ?? 0;
+        const hasTime = startTime !== null && endTime !== null;
+
+        if (workType === 'REGULAR') {
+            if (otRate !== 0) {
+                throw err.validation({
+                    message: 'REGULAR: otRate ต้องเป็น 0',
+                });
+            }
+            if (accommodation !== 0) {
+                throw err.validation({
+                    message: 'REGULAR: accommodation ต้องเป็น 0',
+                });
+            }
+            if (!hasTime) {
+                throw err.validation({
+                    message: 'REGULAR: ต้องระบุ timeIn และ timeOut',
+                });
+            }
+        }
+
+        if (workType === 'OVERTIME') {
+            if (otRate <= 0) {
+                throw err.validation({
+                    message: 'OVERTIME: otRate ต้องมากกว่า 0',
+                });
+            }
+            if (accommodation !== 0) {
+                throw err.validation({
+                    message: 'OVERTIME: accommodation ต้องเป็น 0',
+                });
+            }
+            if (!hasTime) {
+                throw err.validation({
+                    message: 'OVERTIME: ต้องระบุ timeIn และ timeOut',
+                });
+            }
+        }
+
+        if (workType === 'ACCOMMODATION') {
+            if (otRate !== 0) {
+                throw err.validation({
+                    message: 'ACCOMMODATION: otRate ต้องเป็น 0',
+                });
+            }
+            if (accommodation <= 0) {
+                throw err.validation({
+                    message: 'ACCOMMODATION: accommodation ต้องมากกว่า 0',
+                });
+            }
+            if (hasTime) {
+                throw err.validation({
+                    message: 'ACCOMMODATION: ไม่ต้องระบุ timeIn และ timeOut',
+                });
+            }
+        }
+    }
+
+    /**
+     * ตรวจสอบว่าช่วงเวลาสองช่วงทับซ้อนกันหรือไม่
+     * Overlap: start1 < end2 AND end1 > start2
+     * @param {Date} start1 - เวลาเริ่มต้นช่วงที่ 1
+     * @param {Date} end1 - เวลาสิ้นสุดช่วงที่ 1
+     * @param {Date} start2 - เวลาเริ่มต้นช่วงที่ 2
+     * @param {Date} end2 - เวลาสิ้นสุดช่วงที่ 2
+     * @returns {boolean} true ถ้าทับซ้อน
+     */
+    _hasTimeOverlap(start1, end1, start2, end2) {
+        return start1 < end2 && end1 > start2;
+    }
+
+    /**
+     * ตรวจสอบว่าไม่มีเวลาทับซ้อนกับ TimeEntry ที่มีอยู่ (Single Query Version)
+     * @param {Array} entries - entries ที่มี startTime, endTime, employeeId, timeIn, timeOut แล้ว
+     * @param {Array} excludeEntryIds - ID ของ entries ที่จะยกเว้น (สำหรับ update)
+     * @param {Object} tx - Prisma transaction client (optional)
+     * @throws {HttpError} ถ้ามีการทับซ้อน (รวมรายการที่ซ้ำทั้งหมด)
+     */
+    async _validateNoOverlaps(entries, excludeEntryIds = [], tx = null) {
+        const client = tx || prisma;
+        const conflicts = [];
+
+        // Group entries by employee
+        const entriesByEmployee = {};
+        for (const entry of entries) {
+            if (!entriesByEmployee[entry.employeeId]) {
+                entriesByEmployee[entry.employeeId] = [];
+            }
+            entriesByEmployee[entry.employeeId].push(entry);
+        }
+
+        // Check overlaps within the new entries themselves
+        for (const [employeeId, employeeEntries] of Object.entries(entriesByEmployee)) {
+            for (let i = 0; i < employeeEntries.length; i++) {
+                for (let j = i + 1; j < employeeEntries.length; j++) {
+                    const a = employeeEntries[i];
+                    const b = employeeEntries[j];
+                    if (this._hasTimeOverlap(a.startTime, a.endTime, b.startTime, b.endTime)) {
+                        conflicts.push({
+                            type: 'INTERNAL_OVERLAP',
+                            employeeId: Number(employeeId),
+                            entry1: { timeIn: a.timeIn, timeOut: a.timeOut },
+                            entry2: { timeIn: b.timeIn, timeOut: b.timeOut },
+                        });
+                    }
+                }
+            }
+        }
+
+        // Single query for all employees (optimized: N queries → 1 query)
+        const allEmployeeIds = Object.keys(entriesByEmployee).map(Number);
+
+        // Find global min/max time range
+        const allTimes = entries.flatMap((e) => [e.startTime, e.endTime]);
+        const globalMinTime = new Date(Math.min(...allTimes));
+        const globalMaxTime = new Date(Math.max(...allTimes));
+
+        const whereClause = {
+            employeeId: { in: allEmployeeIds },
+            workType: { in: ['REGULAR', 'OVERTIME'] },
+            AND: [
+                { startTime: { lt: globalMaxTime } },
+                { endTime: { gt: globalMinTime } },
+            ],
+        };
+
+        if (excludeEntryIds.length > 0) {
+            whereClause.id = { notIn: excludeEntryIds };
+        }
+
+        const existingEntries = await client.timeEntry.findMany({
+            where: whereClause,
+            select: {
+                id: true,
+                employeeId: true,
+                startTime: true,
+                endTime: true,
+                timeSheet: {
+                    select: {
+                        id: true,
+                        workDate: true,
+                    },
+                },
+            },
+        });
+
+        // Group existing entries by employee for O(1) lookup
+        const existingByEmployee = {};
+        for (const existing of existingEntries) {
+            if (!existingByEmployee[existing.employeeId]) {
+                existingByEmployee[existing.employeeId] = [];
+            }
+            existingByEmployee[existing.employeeId].push(existing);
+        }
+
+        // Check overlaps with existing entries
+        for (const [employeeId, employeeEntries] of Object.entries(entriesByEmployee)) {
+            const existingForEmployee = existingByEmployee[employeeId] || [];
+
+            for (const entry of employeeEntries) {
+                for (const existing of existingForEmployee) {
+                    if (this._hasTimeOverlap(entry.startTime, entry.endTime, existing.startTime, existing.endTime)) {
+                        conflicts.push({
+                            type: 'DATABASE_OVERLAP',
+                            employeeId: Number(employeeId),
+                            newEntry: { timeIn: entry.timeIn, timeOut: entry.timeOut },
+                            conflictingEntry: {
+                                id: existing.id,
+                                startTime: existing.startTime,
+                                endTime: existing.endTime,
+                                timeSheetId: existing.timeSheet.id,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        // Throw error with all conflicts if any found
+        if (conflicts.length > 0) {
+            throw err.conflict(
+                { conflicts, totalConflicts: conflicts.length },
+                `พบช่วงเวลาทับซ้อน ${conflicts.length} รายการ`
+            );
+        }
+    }
+
+    /**
+     * ตรวจสอบว่าไม่มี ACCOMMODATION ซ้ำในเดือนนั้น
+     * @param {number} employeeId - ID พนักงาน
+     * @param {string} monthPeriod - เดือน "YYYY-MM"
+     * @param {Array} accommodationDates - วันที่ ["2024-01-01", "2024-01-05"]
+     * @param {Array} excludeEntryIds - ID ของ entries ที่จะยกเว้น
+     * @param {Object} tx - Prisma transaction client (optional)
+     * @throws {HttpError} ถ้ามี ACCOMMODATION ซ้ำ
+     */
+    async _validateNoAccommodationDuplicates(employeeId, monthPeriod, accommodationDates, excludeEntryIds = [], tx = null) {
+        if (!accommodationDates || accommodationDates.length === 0) return;
+
+        const client = tx || prisma;
+
+        // Check internal duplicates
+        const seen = new Set();
+        const internalDuplicates = [];
+        for (const date of accommodationDates) {
+            if (seen.has(date)) {
+                internalDuplicates.push({ date });
+            } else {
+                seen.add(date);
+            }
+        }
+
+        if (internalDuplicates.length > 0) {
+            throw err.conflict(
+                { duplicates: internalDuplicates, totalDuplicates: internalDuplicates.length },
+                `พบ ACCOMMODATION ซ้ำ ${internalDuplicates.length} รายการในข้อมูลที่ส่งมา`
+            );
+        }
+
+        // Query existing ACCOMMODATION entries
+        const whereClause = {
+            employeeId,
+            workType: 'ACCOMMODATION',
+            timeSheet: { monthPeriod },
+        };
+        if (excludeEntryIds.length > 0) {
+            whereClause.id = { notIn: excludeEntryIds };
+        }
+
+        const existingEntries = await client.timeEntry.findMany({
+            where: whereClause,
+            select: { id: true, startTime: true },
+        });
+
+        // Check duplicates with database
+        const existingDates = new Set(
+            existingEntries.map((e) => e.startTime.toISOString().split('T')[0])
+        );
+
+        const duplicates = [];
+        for (const date of accommodationDates) {
+            if (existingDates.has(date)) {
+                duplicates.push({ date });
+            }
+        }
+
+        if (duplicates.length > 0) {
+            throw err.conflict(
+                { duplicates, totalDuplicates: duplicates.length },
+                `พบ ACCOMMODATION ซ้ำ ${duplicates.length} รายการกับข้อมูลที่มีอยู่`
+            );
+        }
+    }
+
+    // ============================================
+    // Public Methods
+    // ============================================
+
     /**
      * ดึงรายการ TimeSheet ทั้งหมดพร้อม pagination
      * @param {Object} params - Query parameters
@@ -140,26 +415,7 @@ class TimeSheetService {
                     },
                 },
                 timeEntries: {
-                    select: {
-                        id: true,
-                        employeeId: true,
-                        startTime: true,
-                        endTime: true,
-                        shiftType: true,
-                        workType: true,
-                        otRate: true,
-                        accommodation: true,
-                        isNegative: true,
-                        lockFlag: true,
-                        note: true,
-                        employee: {
-                            select: {
-                                id: true,
-                                firstName: true,
-                                lastName: true,
-                            },
-                        },
-                    },
+                    select: prismaSelectDefault.timeEntry,
                 },
             },
         });
@@ -184,7 +440,7 @@ class TimeSheetService {
      * @param {number} params.createBy - User ID ที่สร้าง
      * @returns {Promise<Object>} ข้อมูล TimeSheet พร้อม TimeEntries
      */
-    async createTimeSheetWithEntries({ workLeaderId, workDate, allowDuplicate, pattern, entries, createBy }) {
+    async createWorkerTimeSheet({ workLeaderId, workDate, allowDuplicate, pattern, entries, createBy }) {
         // 1. Validate workLeader exists
         const workLeader = await prisma.workLeader.findUnique({
             where: { id: workLeaderId },
@@ -208,7 +464,7 @@ class TimeSheetService {
         }
 
         // 3. Build DateTime objects
-        const workDateObj = combineDateAndTime(workDate, "00:00");
+        const workDateObj = combineDateAndTime(workDate, "00:00:00");
         const entriesWithDateTime = entries.map((entry) => ({
             ...entry,
             startTime: combineDateAndTime(workDate, entry.timeIn),
@@ -239,7 +495,7 @@ class TimeSheetService {
             }
 
             // Check for time overlaps for each employee
-            await this.validateNoOverlaps(entriesWithDateTime, [], tx);
+            await this._validateNoOverlaps(entriesWithDateTime, [], tx);
 
             // Create TimeSheet
             const timeSheet = await tx.timeSheet.create({
@@ -250,13 +506,7 @@ class TimeSheetService {
                     status: 'PENDING',
                     createBy,
                 },
-                select: {
-                    id: true,
-                    sheetType: true,
-                    workDate: true,
-                    status: true,
-                    createdAt: true,
-                },
+                select: prismaSelectDefault.timeSheet,
             });
 
             // Create all TimeEntries
@@ -275,22 +525,7 @@ class TimeSheetService {
                             isNegative: false,
                             lockFlag: false,
                         },
-                        select: {
-                            id: true,
-                            employeeId: true,
-                            startTime: true,
-                            endTime: true,
-                            shiftType: true,
-                            workType: true,
-                            otRate: true,
-                            employee: {
-                                select: {
-                                    id: true,
-                                    firstName: true,
-                                    lastName: true,
-                                },
-                            },
-                        },
+                        select: prismaSelectDefault.timeEntry,
                     })
                 )
             );
@@ -305,13 +540,137 @@ class TimeSheetService {
     }
 
     /**
-     * อัปเดตข้อมูล TimeSheet
+     * สร้าง TimeSheet สำหรับ Driver (Monthly)
+     * @param {Object} params - ข้อมูล TimeSheet และ Entries
+     * @param {number} params.employeeId - ID พนักงาน
+     * @param {string} params.monthPeriod - เดือน "YYYY-MM"
+     * @param {boolean} params.allowDuplicate - อนุญาตให้สร้างซ้ำได้
+     * @param {Array} params.entries - รายการเวลาทำงาน
+     * @param {number} params.createBy - User ID ที่สร้าง
+     * @returns {Promise<Object>} ข้อมูล TimeSheet พร้อม TimeEntries
+     */
+    async createDriverTimeSheet({ employeeId, monthPeriod, allowDuplicate, entries, createBy }) {
+        // 1. Validate employee exists
+        const employee = await prisma.employee.findUnique({
+            where: { id: employeeId },
+            select: { id: true },
+        });
+        if (!employee) {
+            throw err.notFound({ employeeId }, 'ไม่พบพนักงาน');
+        }
+
+        // 2. Build entries with full datetime
+        const entriesWithDateTime = entries.map((entry) => {
+            if (entry.workType === 'ACCOMMODATION') {
+                return {
+                    ...entry,
+                    startTime: combineDateAndTime(entry.date, '00:00:00'),
+                    endTime: null,
+                };
+            }
+            return {
+                ...entry,
+                startTime: combineDateAndTime(entry.date, entry.timeIn),
+                endTime: combineDateAndTime(entry.date, entry.timeOut),
+            };
+        });
+
+        // 3. Separate entries by type
+        const timeEntries = entriesWithDateTime.filter((e) => e.workType !== 'ACCOMMODATION');
+        const accommodationEntries = entriesWithDateTime.filter((e) => e.workType === 'ACCOMMODATION');
+
+        // 4. Validate overlaps (reuse existing function)
+        if (timeEntries.length > 0) {
+            await this._validateNoOverlaps(
+                timeEntries.map((e) => ({
+                    employeeId,
+                    startTime: e.startTime,
+                    endTime: e.endTime,
+                    timeIn: e.timeIn,
+                    timeOut: e.timeOut,
+                }))
+            );
+        }
+
+        // 5. Validate accommodation duplicates
+        if (accommodationEntries.length > 0) {
+            await this._validateNoAccommodationDuplicates(
+                employeeId,
+                monthPeriod,
+                accommodationEntries.map((e) => e.date)
+            );
+        }
+
+        // 6. Create timesheet + entries in transaction
+        const result = await prisma.$transaction(async (tx) => {
+            // Check for duplicate if allowDuplicate is false
+            if (!allowDuplicate) {
+                const existingSheet = await tx.timeSheet.findFirst({
+                    where: {
+                        employeeId,
+                        monthPeriod,
+                    },
+                    select: { id: true },
+                });
+                if (existingSheet) {
+                    throw err.conflict(
+                        { employeeId, monthPeriod },
+                        'มีการลงเวลาสำหรับพนักงานและเดือนนี้แล้ว หากต้องการสร้างซ้ำ กรุณายืนยันการสร้าง'
+                    );
+                }
+            }
+
+            const timeSheet = await tx.timeSheet.create({
+                data: {
+                    employeeId,
+                    monthPeriod,
+                    sheetType: 'MONTHLY',
+                    status: 'PENDING',
+                    createBy,
+                },
+                select: {
+                    id: true,
+                    sheetType: true,
+                    monthPeriod: true,
+                    status: true,
+                    createdAt: true,
+                },
+            });
+
+            const createdEntries = await Promise.all(
+                entriesWithDateTime.map((entry) =>
+                    tx.timeEntry.create({
+                        data: {
+                            timeSheetId: timeSheet.id,
+                            employeeId,
+                            startTime: entry.startTime,
+                            endTime: entry.endTime,
+                            workType: entry.workType,
+                            otRate: entry.otRate || 0,
+                            accommodation: entry.accommodation || 0,
+                            shiftType: 'REGULAR',
+                            isNegative: false,
+                            lockFlag: false,
+                        },
+                        select: prismaSelectDefault.timeEntry,
+                    })
+                )
+            );
+
+            return { ...timeSheet, timeEntries: createdEntries };
+        });
+
+        return result;
+    }
+
+    /**
+     * อัปเดตสถานะ TimeSheet (status only)
      * @param {number} id - TimeSheet ID
-     * @param {Object} params - ข้อมูลที่จะอัปเดต
+     * @param {string} status - สถานะใหม่ (PENDING, FILLED, LOCKED)
      * @returns {Promise<TimeSheet>} ข้อมูล TimeSheet ที่อัปเดตแล้ว
      * @throws {AppError} ไม่พบ TimeSheet (notFound)
      */
-    async updateTimeSheet(id, { status, files, note }) {
+    async updateTimeSheetStatus(id, status) {
         // ตรวจสอบว่ามี timeSheet อยู่จริง
         const timeSheet = await prisma.timeSheet.findUnique({
             where: { id },
@@ -331,10 +690,7 @@ class TimeSheetService {
 
         const updated = await prisma.timeSheet.update({
             where: { id },
-            data: {
-                ...(status !== undefined && { status }),
-                ...(files !== undefined && { files }),
-            },
+            data: { status },
             select: {
                 ...prismaSelectDefault.timeSheet,
                 createdAt: true,
@@ -359,237 +715,418 @@ class TimeSheetService {
     }
 
     /**
-     * อัปเดต TimeSheet พร้อม TimeEntries (เพิ่ม/แก้ไข/ลบ)
+     * ลบ TimeSheet (เฉพาะะ PENDING เท่านั้น)
      * @param {number} id - TimeSheet ID
-     * @param {Object} params - ข้อมูลที่จะอัปเดต
-     * @param {string} [params.status] - สถานะใหม่
-     * @param {Object} [params.entries] - การเปลี่ยนแปลง entries
-     * @param {Array} [params.entries.add] - entries ที่จะเพิ่ม
-     * @param {Array} [params.entries.update] - entries ที่จะแก้ไข
-     * @param {Array} [params.entries.delete] - IDs ของ entries ที่จะลบ
-     * @returns {Promise<Object>} ข้อมูล TimeSheet ที่อัปเดตแล้ว
+     * @throws {AppError} ไม่พบ TimeSheet หรือไม่ใช่สถานะ PENDING
      */
-    async updateTimeSheetWithEntries(id, { status, entries }) {
-        // 1. ตรวจสอบว่ามี timeSheet อยู่จริง
+    async deleteTimeSheet(id) {
         const timeSheet = await prisma.timeSheet.findUnique({
             where: { id },
-            select: {
-                id: true,
-                status: true,
-                workDate: true,
-                timeEntries: {
-                    select: { id: true, employeeId: true, startTime: true, endTime: true },
-                },
-            },
+            select: { id: true, status: true },
         });
 
         if (!timeSheet) {
             throw err.notFound({ id });
         }
 
-        // 2. ถ้า LOCKED แล้วไม่อนุญาตให้แก้ไข
-        if (timeSheet.status === 'LOCKED') {
+        if (timeSheet.status !== 'PENDING') {
             throw err.validation({
-                message: 'TimeSheet ถูกล็อคแล้ว ไม่สามารถแก้ไขได้',
+                message: 'สามารถลบได้เฉพาะ TimeSheet ที่มีสถานะ PENDING เท่านั้น',
             });
         }
 
-        const workDateObj = timeSheet.workDate;
-        const addEntries = entries?.add || [];
-        const updateEntries = entries?.update || [];
-        const deleteEntryIds = entries?.delete || [];
+        // Prisma schema มี onDelete: Cascade สำหรับ entries จะถูกลบอัตโนมัติ
+        await prisma.timeSheet.delete({ where: { id } });
+    }
 
-        // 3. Validate employees in add entries
-        if (addEntries.length > 0) {
-            const employeeIds = [...new Set(addEntries.map((e) => e.employeeId))];
-            const employees = await prisma.employee.findMany({
-                where: { id: { in: employeeIds } },
-                select: { id: true },
-            });
+    // ============================================
+    // Worker TimeEntry Methods (DAILY timesheet only)
+    // ============================================
 
-            if (employees.length !== employeeIds.length) {
-                const foundIds = employees.map((e) => e.id);
-                const missingIds = employeeIds.filter((id) => !foundIds.includes(id));
-                throw err.notFound({ missingEmployeeIds: missingIds }, 'ไม่พบพนักงานบางคน');
-            }
-        }
-
-        // 4. Validate update entries exist and belong to this timesheet
-        if (updateEntries.length > 0) {
-            const updateIds = updateEntries.map((e) => e.id);
-            const existingEntries = await prisma.timeEntry.findMany({
-                where: { id: { in: updateIds }, timeSheetId: id },
-                select: { id: true },
-            });
-
-            if (existingEntries.length !== updateIds.length) {
-                const foundIds = existingEntries.map((e) => e.id);
-                const missingIds = updateIds.filter((id) => !foundIds.includes(id));
-                throw err.notFound({ missingEntryIds: missingIds }, 'ไม่พบรายการเวลาบางรายการ');
-            }
-        }
-
-        // 5. Validate delete entries exist and belong to this timesheet
-        if (deleteEntryIds.length > 0) {
-            const existingEntries = await prisma.timeEntry.findMany({
-                where: { id: { in: deleteEntryIds }, timeSheetId: id },
-                select: { id: true },
-            });
-
-            if (existingEntries.length !== deleteEntryIds.length) {
-                const foundIds = existingEntries.map((e) => e.id);
-                const missingIds = deleteEntryIds.filter((id) => !foundIds.includes(id));
-                throw err.notFound({ missingEntryIds: missingIds }, 'ไม่พบรายการเวลาที่จะลบ');
-            }
-        }
-
-        // 6. Build entries with DateTime for overlap validation
-        const entriesToValidate = [];
-
-        // Add entries
-        for (const entry of addEntries) {
-            entriesToValidate.push({
-                ...entry,
-                startTime: combineDateAndTime(workDateObj, entry.timeIn),
-                endTime: combineDateAndTime(workDateObj, entry.timeOut),
-            });
-        }
-
-        // Update entries - merge with existing data
-        for (const entry of updateEntries) {
-            const existing = timeSheet.timeEntries.find((e) => e.id === entry.id);
-            const timeIn = entry.timeIn
-                ? combineDateAndTime(workDateObj, entry.timeIn)
-                : existing.startTime;
-            const timeOut = entry.timeOut
-                ? combineDateAndTime(workDateObj, entry.timeOut)
-                : existing.endTime;
-
-            entriesToValidate.push({
-                ...entry,
-                employeeId: existing.employeeId,
-                startTime: timeIn,
-                endTime: timeOut,
-                timeIn: entry.timeIn || existing.startTime.toTimeString().slice(0, 5),
-                timeOut: entry.timeOut || existing.endTime.toTimeString().slice(0, 5),
-            });
-        }
-
-        // 7. Check for overlaps (excluding entries being updated/deleted)
-        const excludeIds = [...updateEntries.map((e) => e.id), ...deleteEntryIds];
-        if (entriesToValidate.length > 0) {
-            await this.validateNoOverlaps(entriesToValidate, excludeIds);
-        }
-
-        // 8. Execute in transaction
-        const result = await prisma.$transaction(async (tx) => {
-            // Delete entries
-            if (deleteEntryIds.length > 0) {
-                await tx.timeEntry.deleteMany({
-                    where: { id: { in: deleteEntryIds } },
-                });
-            }
-
-            // Update entries
-            for (const entry of updateEntries) {
-                const updateData = {};
-                if (entry.timeIn) {
-                    updateData.startTime = combineDateAndTime(workDateObj, entry.timeIn);
-                }
-                if (entry.timeOut) {
-                    updateData.endTime = combineDateAndTime(workDateObj, entry.timeOut);
-                }
-                if (entry.shiftType) {
-                    updateData.shiftType = entry.shiftType === 'regular' ? 'REGULAR' : 'SHIFT';
-                }
-
-                if (Object.keys(updateData).length > 0) {
-                    await tx.timeEntry.update({
-                        where: { id: entry.id },
-                        data: updateData,
-                    });
-                }
-            }
-
-            // Add entries - get workType and otRate from existing entries pattern
-            // For simplicity, use REGULAR workType and 0 otRate for new entries
-            // This can be enhanced later if needed
-            const newEntries = [];
-            for (const entry of addEntries) {
-                const newEntry = await tx.timeEntry.create({
-                    data: {
-                        timeSheetId: id,
-                        employeeId: entry.employeeId,
-                        startTime: combineDateAndTime(workDateObj, entry.timeIn),
-                        endTime: combineDateAndTime(workDateObj, entry.timeOut),
-                        shiftType: entry.shiftType === 'regular' ? 'REGULAR' : 'SHIFT',
-                        workType: 'REGULAR',
-                        otRate: 0,
-                        accommodation: 0,
-                        isNegative: false,
-                        lockFlag: false,
-                    },
-                    select: {
-                        id: true,
-                        employeeId: true,
-                        startTime: true,
-                        endTime: true,
-                        shiftType: true,
-                        workType: true,
-                        otRate: true,
-                        employee: {
-                            select: {
-                                id: true,
-                                firstName: true,
-                                lastName: true,
-                            },
-                        },
-                    },
-                });
-                newEntries.push(newEntry);
-            }
-
-            // Update timesheet status
-            const updatedTimeSheet = await tx.timeSheet.update({
-                where: { id },
-                data: {
-                    ...(status !== undefined && { status }),
-                },
-                select: {
-                    ...prismaSelectDefault.timeSheet,
-                    createdAt: true,
-                    updatedAt: true,
-                    workLeader: {
-                        select: {
-                            id: true,
-                            name: true,
-                        },
-                    },
-                    timeEntries: {
-                        select: {
-                            id: true,
-                            employeeId: true,
-                            startTime: true,
-                            endTime: true,
-                            shiftType: true,
-                            workType: true,
-                            otRate: true,
-                            employee: {
-                                select: {
-                                    id: true,
-                                    firstName: true,
-                                    lastName: true,
-                                },
-                            },
-                        },
-                    },
-                },
-            });
-
-            return updatedTimeSheet;
+    /**
+     * เพิ่ม TimeEntry สำหรับ Worker (DAILY)
+     * - ใช้ pattern จาก entry แรกใน timesheet
+     * - ห้ามระบุ workType/otRate เอง
+     * @param {number} timeSheetId - TimeSheet ID
+     * @param {Object} data - ข้อมูล TimeEntry (employeeId, timeIn, timeOut, shiftType, note)
+     * @returns {Promise<Object>} ข้อมูล TimeEntry ที่สร้าง
+     */
+    async createWorkerTimeEntry(timeSheetId, data) {
+        // 1. ตรวจสอบ timesheet เป็น DAILY และไม่ได้ LOCKED
+        const timeSheet = await prisma.timeSheet.findUnique({
+            where: { id: timeSheetId },
+            select: prismaSelectDefault.timeSheet,
         });
 
-        return result;
+        if (!timeSheet) {
+            throw err.notFound({ id: timeSheetId }, 'ไม่พบใบลงเวลา');
+        }
+
+        if (timeSheet.sheetType !== 'DAILY') {
+            throw err.validation({ message: 'Endpoint นี้สำหรับใบลงเวลาประเภทคนงานเท่านั้น' });
+        }
+
+        if (timeSheet.status === 'LOCKED') {
+            throw err.validation({ message: 'ใบลงเวลาถูกล็อคแล้ว ไม่สามารถเพิ่มรายการได้' });
+        }
+
+        // 2. Validate employee exists
+        const employee = await prisma.employee.findUnique({
+            where: { id: data.employeeId },
+            select: { id: true },
+        });
+        if (!employee) {
+            throw err.notFound({ employeeId: data.employeeId }, 'ไม่พบพนักงาน');
+        }
+
+        // 3. ดึง pattern จาก entry แรกใน timesheet
+        const firstEntry = await prisma.timeEntry.findFirst({
+            where: { timeSheetId },
+            select: { workType: true, otRate: true },
+            orderBy: { id: 'asc' },
+        });
+
+        // ถ้ายังไม่มี entry → throw error (ต้องสร้าง timesheet พร้อม entries ก่อน)
+        if (!firstEntry) {
+            throw err.validation({
+                message: 'ใบลงเวลายังไม่มีรายการ กรุณาสร้างใหม่พร้อมรายการเวลา',
+            });
+        }
+
+        // 4. Build DateTime objects
+        const startTime = combineDateAndTime(timeSheet.workDate, data.timeIn);
+        const endTime = combineDateAndTime(timeSheet.workDate, data.timeOut);
+
+        // 5. Check for time overlaps
+        await this._validateNoOverlaps([{
+            employeeId: data.employeeId,
+            startTime,
+            endTime,
+            timeIn: data.timeIn,
+            timeOut: data.timeOut,
+        }]);
+
+        // 6. Create entry with pattern from first entry
+        return prisma.timeEntry.create({
+            data: {
+                timeSheetId,
+                employeeId: data.employeeId,
+                startTime,
+                endTime,
+                shiftType: data.shiftType || 'REGULAR',
+                workType: firstEntry.workType,
+                otRate: firstEntry.otRate,
+                accommodation: 0,
+                isNegative: false,
+                lockFlag: false,
+                note: data.note || null,
+            },
+            select: prismaSelectDefault.timeEntry,
+        });
+    }
+
+    /**
+     * อัปเดต TimeEntry สำหรับ Worker (DAILY)
+     * - แก้ไขได้แค่ timeIn, timeOut, note
+     * - ห้ามเปลี่ยน workType, otRate (pattern ร่วมกัน)
+     * @param {number} timeSheetId - TimeSheet ID
+     * @param {number} entryId - TimeEntry ID
+     * @param {Object} data - ข้อมูลที่จะอัปเดต (timeIn, timeOut, note)
+     * @returns {Promise<Object>} ข้อมูล TimeEntry ที่อัปเดต
+     */
+    async updateWorkerTimeEntry(timeSheetId, entryId, data) {
+        // 1. Validate timesheet
+        const timeSheet = await prisma.timeSheet.findUnique({
+            where: { id: timeSheetId },
+            select: prismaSelectDefault.timeSheet,
+        });
+
+        if (!timeSheet) {
+            throw err.notFound({ id: timeSheetId }, 'ไม่พบใบลงเวลา');
+        }
+
+        if (timeSheet.sheetType !== 'DAILY') {
+            throw err.validation({ message: 'Endpoint นี้สำหรับใบลงเวลาประเภทคนงานเท่านั้น' });
+        }
+
+        if (timeSheet.status === 'LOCKED') {
+            throw err.validation({ message: 'ใบลงเวลาถูกล็อคแล้ว ไม่สามารถแก้ไขได้' });
+        }
+
+        // 2. Validate entry exists and belongs to timesheet
+        const entry = await prisma.timeEntry.findUnique({
+            where: { id: entryId },
+            select: { id: true, timeSheetId: true, employeeId: true },
+        });
+
+        if (!entry || entry.timeSheetId !== timeSheetId) {
+            throw err.notFound({ entryId }, 'ไม่พบรายการเวลา');
+        }
+
+        // 3. Build new DateTime
+        const startTime = combineDateAndTime(timeSheet.workDate, data.timeIn);
+        const endTime = combineDateAndTime(timeSheet.workDate, data.timeOut);
+
+        // 4. Check for overlaps
+        await this._validateNoOverlaps([{
+            employeeId: entry.employeeId,
+            startTime,
+            endTime,
+            timeIn: data.timeIn,
+            timeOut: data.timeOut,
+        }], [entryId]);
+
+        // 5. Update (เฉพาะ timeIn, timeOut, note)
+        return prisma.timeEntry.update({
+            where: { id: entryId },
+            data: {
+                startTime,
+                endTime,
+                note: data.note,
+            },
+            select: prismaSelectDefault.timeEntry,
+        });
+    }
+
+    // ============================================
+    // Driver TimeEntry Methods (MONTHLY timesheet only)
+    // ============================================
+
+    /**
+     * เพิ่ม TimeEntry สำหรับ Driver (MONTHLY)
+     * - ระบุ workType, otRate, accommodation เองได้
+     * @param {number} timeSheetId - TimeSheet ID
+     * @param {Object} data - ข้อมูล TimeEntry
+     * @returns {Promise<Object>} ข้อมูล TimeEntry ที่สร้าง
+     */
+    async createDriverTimeEntry(timeSheetId, data) {
+        // 1. Validate timesheet เป็น MONTHLY (read-only checks, ไม่ต้องใส่ transaction)
+        const timeSheet = await prisma.timeSheet.findUnique({
+            where: { id: timeSheetId },
+            select: prismaSelectDefault.timeSheet,
+        });
+
+        if (!timeSheet) {
+            throw err.notFound({ id: timeSheetId }, 'ไม่พบใบลงเวลา');
+        }
+
+        if (timeSheet.sheetType !== 'MONTHLY') {
+            throw err.validation({ message: 'Endpoint นี้สำหรับใบลงเวลาประเภทคนขับรถเท่านั้น' });
+        }
+
+        if (timeSheet.status === 'LOCKED') {
+            throw err.validation({ message: 'ใบลงเวลาถูกล็อคแล้ว ไม่สามารถเพิ่มรายการได้' });
+        }
+
+        // 2. Validate employee exists and match with timeSheet
+        const employee = await prisma.employee.findUnique({
+            where: { id: data.employeeId },
+            select: { id: true },
+        });
+        if (!employee) {
+            throw err.notFound({ employeeId: data.employeeId }, 'ไม่พบพนักงาน');
+        }
+        if (data.employeeId !== timeSheet.employeeId) {
+            throw err.validation({ message: 'พนักงานไม่ตรงกับใบลงเวลา' });
+        }
+
+        // 3. Execute validation + create in transaction
+        return prisma.$transaction(async (tx) => {
+            // Build DateTime based on workType
+            let startTime = null;
+            let endTime = null;
+
+            if (data.workType === 'ACCOMMODATION') {
+                startTime = combineDateAndTime(data.date, '00:00:00');
+                endTime = null;
+
+                // Validate no duplicate accommodation
+                await this._validateNoAccommodationDuplicates(
+                    data.employeeId,
+                    timeSheet.monthPeriod,
+                    [data.date],
+                    [],
+                    tx
+                );
+            } else {
+                startTime = combineDateAndTime(data.date, data.timeIn);
+                endTime = combineDateAndTime(data.date, data.timeOut);
+
+                // Validate no overlaps
+                await this._validateNoOverlaps([{
+                    employeeId: data.employeeId,
+                    startTime,
+                    endTime,
+                    timeIn: data.timeIn,
+                    timeOut: data.timeOut,
+                }], [], tx);
+            }
+
+            // Validate workType rules
+            this._validateWorkTypeRules(data, startTime, endTime);
+
+            // Create entry
+            return tx.timeEntry.create({
+                data: {
+                    timeSheetId,
+                    employeeId: data.employeeId,
+                    startTime,
+                    endTime,
+                    shiftType: 'REGULAR',
+                    workType: data.workType,
+                    otRate: data.otRate ?? 0,
+                    accommodation: data.accommodation ?? 0,
+                    isNegative: false,
+                    lockFlag: false,
+                    note: data.note || null,
+                },
+                select: prismaSelectDefault.timeEntry,
+            });
+        });
+    }
+
+    /**
+     * อัปเดต TimeEntry สำหรับ Driver (MONTHLY)
+     * - แก้ไข timeIn, timeOut, otRate, accommodation, note ได้
+     * - ห้ามเปลี่ยน workType
+     * @param {number} timeSheetId - TimeSheet ID
+     * @param {number} entryId - TimeEntry ID
+     * @param {Object} data - ข้อมูลที่จะอัปเดต
+     * @returns {Promise<Object>} ข้อมูล TimeEntry ที่อัปเดต
+     */
+    async updateDriverTimeEntry(timeSheetId, entryId, data) {
+        // 1. Validate timesheet
+        const timeSheet = await prisma.timeSheet.findUnique({
+            where: { id: timeSheetId },
+            select: prismaSelectDefault.timeSheet,
+        });
+
+        if (!timeSheet) {
+            throw err.notFound({ id: timeSheetId }, 'ไม่พบใบลงเวลา');
+        }
+
+        if (timeSheet.sheetType !== 'MONTHLY') {
+            throw err.validation({ message: 'Endpoint นี้สำหรับใบลงเวลาประเภทคนขับรถเท่านั้น' });
+        }
+
+        if (timeSheet.status === 'LOCKED') {
+            throw err.validation({ message: 'ใบลงเวลาถูกล็อคแล้ว ไม่สามารถแก้ไขได้' });
+        }
+
+        // 2. Validate entry
+        const entry = await prisma.timeEntry.findUnique({
+            where: { id: entryId },
+            select: prismaSelectDefault.timeEntry,
+        });
+
+        if (!entry || entry.timeSheetId !== timeSheetId) {
+            throw err.notFound({ entryId }, 'ไม่พบรายการเวลา');
+        }
+
+        // 3. Build update data
+        const updateData = {};
+        let finalStartTime = entry.startTime;
+        let finalEndTime = entry.endTime;
+
+        // Handle time updates (เฉพาะ REGULAR และ OVERTIME)
+        if (entry.workType !== 'ACCOMMODATION') {
+            if (data.timeIn !== undefined || data.timeOut !== undefined) {
+                const dateStr = entry.startTime.toISOString().split('T')[0];
+                finalStartTime = data.timeIn ? combineDateAndTime(dateStr, data.timeIn) : entry.startTime;
+                finalEndTime = data.timeOut ? combineDateAndTime(dateStr, data.timeOut) : entry.endTime;
+
+                updateData.startTime = finalStartTime;
+                updateData.endTime = finalEndTime;
+
+                await this._validateNoOverlaps([{
+                    employeeId: entry.employeeId,
+                    startTime: finalStartTime,
+                    endTime: finalEndTime,
+                    timeIn: data.timeIn,
+                    timeOut: data.timeOut,
+                }], [entryId]);
+            }
+        }
+
+        // Handle otRate/accommodation
+        if (data.otRate !== undefined) {
+            updateData.otRate = data.otRate;
+        }
+        if (data.accommodation !== undefined) {
+            updateData.accommodation = data.accommodation;
+        }
+        if (data.note !== undefined) {
+            updateData.note = data.note;
+        }
+
+        // 4. Validate workType rules
+        const mergedData = {
+            workType: entry.workType,
+            otRate: data.otRate ?? entry.otRate,
+            accommodation: data.accommodation ?? entry.accommodation,
+        };
+
+        this._validateWorkTypeRules(mergedData, finalStartTime, finalEndTime);
+
+        // 5. Update
+        return prisma.timeEntry.update({
+            where: { id: entryId },
+            data: updateData,
+            select: {
+                id: true,
+                employeeId: true,
+                startTime: true,
+                endTime: true,
+                shiftType: true,
+                workType: true,
+                otRate: true,
+                accommodation: true,
+                note: true,
+                employee: {
+                    select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                    },
+                },
+            },
+        });
+    }
+
+    /**
+     * ลบ TimeEntry
+     * @param {number} timeSheetId - TimeSheet ID
+     * @param {number} entryId - TimeEntry ID
+     */
+    async deleteTimeEntry(timeSheetId, entryId) {
+        // 1. ตรวจสอบ timesheet มีอยู่และไม่ได้ LOCKED
+        const timeSheet = await prisma.timeSheet.findUnique({
+            where: { id: timeSheetId },
+            select: { id: true, status: true },
+        });
+
+        if (!timeSheet) {
+            throw err.notFound({ id: timeSheetId }, 'ไม่พบ TimeSheet');
+        }
+
+        if (timeSheet.status === 'LOCKED') {
+            throw err.validation({
+                message: 'TimeSheet ถูกล็อคแล้ว ไม่สามารถลบได้',
+            });
+        }
+
+        // 2. ตรวจสอบ entry มีอยู่และเป็นของ timesheet นี้
+        const entry = await prisma.timeEntry.findUnique({
+            where: { id: entryId },
+            select: { id: true, timeSheetId: true },
+        });
+
+        if (!entry || entry.timeSheetId !== timeSheetId) {
+            throw err.notFound({ entryId }, 'ไม่พบรายการเวลา');
+        }
+
+        // 3. Delete entry
+        await prisma.timeEntry.delete({ where: { id: entryId } });
     }
 
     /**
@@ -611,7 +1148,16 @@ class TimeSheetService {
         const currentFiles = timeSheet.files || [];
         const updatedFiles = [...currentFiles, filePath];
 
-        return this.updateTimeSheet(id, { files: updatedFiles });
+        return prisma.timeSheet.update({
+            where: { id },
+            data: { files: updatedFiles },
+            select: {
+                ...prismaSelectDefault.timeSheet,
+                createdAt: true,
+                updatedAt: true,
+                files: true,
+            },
+        });
     }
 
     /**
@@ -633,156 +1179,16 @@ class TimeSheetService {
         const currentFiles = timeSheet.files || [];
         const updatedFiles = currentFiles.filter((f) => f !== filePath);
 
-        return this.updateTimeSheet(id, { files: updatedFiles });
-    }
-
-    /**
-     * ล็อค TimeSheet (เปลี่ยนสถานะเป็น LOCKED)
-     * @param {number} id - TimeSheet ID
-     * @returns {Promise<TimeSheet>} ข้อมูล TimeSheet ที่อัปเดตแล้ว
-     */
-    async lockTimeSheet(id) {
-        return this.updateTimeSheet(id, { status: 'LOCKED' });
-    }
-
-    /**
-     * ปลดล็อค TimeSheet (เปลี่ยนสถานะเป็น FILLED)
-     * @param {number} id - TimeSheet ID
-     * @returns {Promise<TimeSheet>} ข้อมูล TimeSheet ที่อัปเดตแล้ว
-     */
-    async unlockTimeSheet(id) {
-        const timeSheet = await prisma.timeSheet.findUnique({
+        return prisma.timeSheet.update({
             where: { id },
-            select: { id: true },
-        });
-
-        if (!timeSheet) {
-            throw err.notFound({ id });
-        }
-
-        // ปลดล็อคโดยตรง (ข้าม validation ใน updateTimeSheet)
-        const updated = await prisma.timeSheet.update({
-            where: { id },
-            data: { status: 'FILLED' },
+            data: { files: updatedFiles },
             select: {
                 ...prismaSelectDefault.timeSheet,
                 createdAt: true,
                 updatedAt: true,
+                files: true,
             },
         });
-
-        return updated;
-    }
-
-    // ============================================
-    // Helper Methods
-    // ============================================
-
-    /**
-     * ตรวจสอบว่าช่วงเวลาสองช่วงทับซ้อนกันหรือไม่
-     * Overlap: start1 < end2 AND end1 > start2
-     * @param {Date} start1 - เวลาเริ่มต้นช่วงที่ 1
-     * @param {Date} end1 - เวลาสิ้นสุดช่วงที่ 1
-     * @param {Date} start2 - เวลาเริ่มต้นช่วงที่ 2
-     * @param {Date} end2 - เวลาสิ้นสุดช่วงที่ 2
-     * @returns {boolean} true ถ้าทับซ้อน
-     */
-    hasTimeOverlap(start1, end1, start2, end2) {
-        return start1 < end2 && end1 > start2;
-    }
-
-    /**
-     * ตรวจสอบว่าไม่มีเวลาทับซ้อนกับ TimeEntry ที่มีอยู่
-     * @param {Array} entries - entries ที่มี startTime, endTime, employeeId, timeIn, timeOut แล้ว
-     * @param {Array} excludeEntryIds - ID ของ entries ที่จะยกเว้น (สำหรับ update)
-     * @param {Object} tx - Prisma transaction client (optional)
-     * @throws {HttpError} ถ้ามีการทับซ้อน
-     */
-    async validateNoOverlaps(entries, excludeEntryIds = [], tx = null) {
-        const client = tx || prisma;
-
-        // Group entries by employee
-        const entriesByEmployee = {};
-        for (const entry of entries) {
-            if (!entriesByEmployee[entry.employeeId]) {
-                entriesByEmployee[entry.employeeId] = [];
-            }
-            entriesByEmployee[entry.employeeId].push(entry);
-        }
-
-        // Check for each employee
-        for (const [employeeId, employeeEntries] of Object.entries(entriesByEmployee)) {
-            // Check overlaps within the new entries themselves
-            for (let i = 0; i < employeeEntries.length; i++) {
-                for (let j = i + 1; j < employeeEntries.length; j++) {
-                    const a = employeeEntries[i];
-                    const b = employeeEntries[j];
-                    if (this.hasTimeOverlap(a.startTime, a.endTime, b.startTime, b.endTime)) {
-                        throw err.conflict(
-                            {
-                                employeeId: Number(employeeId),
-                                entry1: { timeIn: a.timeIn, timeOut: a.timeOut },
-                                entry2: { timeIn: b.timeIn, timeOut: b.timeOut },
-                            },
-                            'มีช่วงเวลาทับซ้อนในรายการที่ส่งมา'
-                        );
-                    }
-                }
-            }
-
-            // Check overlaps with existing entries in database
-            const minTime = employeeEntries.reduce((min, e) =>
-                e.startTime < min ? e.startTime : min, employeeEntries[0].startTime);
-            const maxTime = employeeEntries.reduce((max, e) =>
-                e.endTime > max ? e.endTime : max, employeeEntries[0].endTime);
-
-            const whereClause = {
-                employeeId: Number(employeeId),
-                AND: [
-                    { startTime: { lt: maxTime } },
-                    { endTime: { gt: minTime } },
-                ],
-            };
-
-            if (excludeEntryIds.length > 0) {
-                whereClause.id = { notIn: excludeEntryIds };
-            }
-
-            const existingEntries = await client.timeEntry.findMany({
-                where: whereClause,
-                select: {
-                    id: true,
-                    startTime: true,
-                    endTime: true,
-                    timeSheet: {
-                        select: {
-                            id: true,
-                            workDate: true,
-                        },
-                    },
-                },
-            });
-
-            for (const entry of employeeEntries) {
-                for (const existing of existingEntries) {
-                    if (this.hasTimeOverlap(entry.startTime, entry.endTime, existing.startTime, existing.endTime)) {
-                        throw err.conflict(
-                            {
-                                employeeId: Number(employeeId),
-                                newEntry: { timeIn: entry.timeIn, timeOut: entry.timeOut },
-                                conflictingEntry: {
-                                    id: existing.id,
-                                    startTime: existing.startTime,
-                                    endTime: existing.endTime,
-                                    timeSheetId: existing.timeSheet.id,
-                                },
-                            },
-                            `พนักงานมีเวลาทำงานทับซ้อนกับรายการที่มีอยู่แล้ว (TimeEntry ID: ${existing.id})`
-                        );
-                    }
-                }
-            }
-        }
     }
 }
 

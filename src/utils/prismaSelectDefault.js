@@ -52,4 +52,23 @@ export default {
         status: true,
         files: true,
     },
-}
+    timeEntry: {
+        id: true,
+        employeeId: true,
+        startTime: true,
+        endTime: true,
+        shiftType: true,
+        workType: true,
+        otRate: true,
+        accommodation: true,
+        note: true,
+        isNegative: true,
+        employee: {
+            select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+            },
+        },
+    },
+};
