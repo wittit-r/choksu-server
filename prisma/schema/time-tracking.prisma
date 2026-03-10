@@ -66,9 +66,9 @@ model TimeEntry {
     // เวลาทำงาน
     startTime       DateTime        @map("start_time")
     endTime         DateTime?       @map("end_time")
-    shiftType       ShiftType       @map("shift_type")     // REGULAR, SHIFT - ระบุว่าทำงานแบบไหนในวันนั้น
+    shiftType       ShiftType       @map("shift_type")     // REGULAR, SHIFT - ระบุว่าทำงานแบบไหนในวันนั้น โดย REGULAR จะต้องหักชั่วโมงพักกลางวัน
     workType        WorkType        @map("work_type")      // REGULAR, OVERTIME, ACCOMMODATION
-    otRate          Int             @default(0) @map("ot_rate")    // ตัวคูณ OT (1, 1.5, 2, ...)
+    otRate          Decimal         @default(0) @map("ot_rate") @db.Decimal(3,1)          // ตัวคูณ OT (1, 1.5, 2, ...)
     accommodation   Decimal         @default(0) @map("accommodation") @db.Decimal(12, 2)  // ค่าที่พัก
 
     // สถานะ
