@@ -37,8 +37,8 @@ const CustomJoi = Joi.extend((joi) => ({
             return;
         }
 
-        // ตรวจสอบ HH:mm:ss
-        if (!value.match(/^([01]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/)) {
+        // ตรวจสอบ HH:mm:ss (รองรับ 00:00:00 - 24:00:00)
+        if (!value.match(/^([01]?[0-9]|2[0-4]):[0-5][0-9]:[0-5][0-9]$/)) {
             return { value, errors: helpers.error('time.base') };
         }
 

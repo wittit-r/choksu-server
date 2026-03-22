@@ -5,6 +5,7 @@ import userRoutes from "./user.routes.js";
 import positionRoutes from "./position.routes.js";
 import workLeaderRoutes from "./work-leader.routes.js";
 import branchRoutes from "./branch.routes.js";
+import timesheetRoutes from "./timesheet.routes.js";
 
 const router = express.Router();
 
@@ -25,5 +26,8 @@ router.use('/work-leaders', workLeaderRoutes);
 
 // Branch routes
 router.use('/branches', branchRoutes);
+
+// TimeSheet routes
+router.use('/timesheets', timesheetRoutes);
 
 export default router;

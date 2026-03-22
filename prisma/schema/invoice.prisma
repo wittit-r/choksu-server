@@ -42,12 +42,17 @@ model InvoicePeriod {
     @@map("invoice_periods")
 }
 
-// ใบเรียกเก็บหลัก (1 period + 1 work_leader = 1 invoice)
+// ใบเรียกเก็บหลัก
+// Worker: 1 period + 1 work_leader = 1 invoice
+// Driver: 1 period + 1 employee = 1 invoice
 model Invoice {
     id                  Int             @id @default(autoincrement())
     invoiceRef          String          @unique @map("invoice_ref")    // INV-2024-001
     invoicePeriodId     Int             @map("invoice_period_id")
-    workLeaderId        Int             @map("work_leader_id")
+
+    // Worker ผูก WorkLeader, Driver ผูก Employee
+    workLeaderId        Int?            @map("work_leader_id")
+    employeeId          Int?            @map("employee_id")
 
     // สรุปยอดเบิก
     totalBillValue      Decimal         @default(0) @map("total_bill_value") @db.Decimal(12, 2)
@@ -59,11 +64,13 @@ model Invoice {
 
     // relations
     invoicePeriod       InvoicePeriod   @relation(fields: [invoicePeriodId], references: [id])
-    workLeader          WorkLeader      @relation(fields: [workLeaderId], references: [id])
+    workLeader          WorkLeader?     @relation(fields: [workLeaderId], references: [id])
+    employee            Employee?       @relation(fields: [employeeId], references: [id])
     invoiceRelates      InvoiceRelate[]
 
     @@index([invoicePeriodId])
     @@index([workLeaderId])
+    @@index([employeeId])
     @@map("invoices")
 }
 

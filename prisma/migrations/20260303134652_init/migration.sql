@@ -20,6 +20,9 @@ CREATE TYPE "ShiftType" AS ENUM ('REGULAR', 'SHIFT');
 CREATE TYPE "TimeSheetStatus" AS ENUM ('PENDING', 'FILLED', 'LOCKED');
 
 -- CreateEnum
+CREATE TYPE "TimeSheetType" AS ENUM ('DAILY', 'MONTHLY');
+
+-- CreateEnum
 CREATE TYPE "WorkType" AS ENUM ('REGULAR', 'OVERTIME', 'ACCOMMODATION');
 
 -- CreateEnum
@@ -43,6 +46,7 @@ CREATE TABLE "audit_logs" (
 CREATE TABLE "branches" (
     "id" SERIAL NOT NULL,
     "name" TEXT NOT NULL,
+    "fullname" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3),
 
@@ -71,10 +75,8 @@ CREATE TABLE "employees" (
     "id_card" TEXT NOT NULL,
     "phone" TEXT,
     "bank_account" TEXT,
-    "employee_type" "EmployeeType" NOT NULL,
     "shift_type" "ShiftType" NOT NULL,
-    "position_id" INTEGER NOT NULL,
-    "work_leader_id" INTEGER NOT NULL,
+    "work_leader_id" INTEGER,
     "start_date" TIMESTAMP(3) NOT NULL,
     "is_active" BOOLEAN NOT NULL DEFAULT true,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -106,7 +108,8 @@ CREATE TABLE "invoices" (
     "id" SERIAL NOT NULL,
     "invoice_ref" TEXT NOT NULL,
     "invoice_period_id" INTEGER NOT NULL,
-    "work_leader_id" INTEGER NOT NULL,
+    "work_leader_id" INTEGER,
+    "employee_id" INTEGER,
     "total_bill_value" DECIMAL(12,2) NOT NULL DEFAULT 0,
     "note" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -220,10 +223,14 @@ CREATE TABLE "bill_rates" (
 -- CreateTable
 CREATE TABLE "time_sheets" (
     "id" SERIAL NOT NULL,
-    "work_leader_id" INTEGER NOT NULL,
-    "work_date" TIMESTAMP(3) NOT NULL,
+    "work_leader_id" INTEGER,
+    "work_date" TIMESTAMP(3),
+    "employee_id" INTEGER,
+    "month_period" TEXT,
+    "sheet_type" "TimeSheetType" NOT NULL DEFAULT 'DAILY',
     "status" "TimeSheetStatus" NOT NULL DEFAULT 'PENDING',
     "create_by" INTEGER NOT NULL,
+    "files" JSONB,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3),
 
@@ -327,12 +334,6 @@ CREATE INDEX "contracts_end_date_idx" ON "contracts"("end_date");
 CREATE UNIQUE INDEX "employees_id_card_key" ON "employees"("id_card");
 
 -- CreateIndex
-CREATE INDEX "employees_employee_type_idx" ON "employees"("employee_type");
-
--- CreateIndex
-CREATE INDEX "employees_position_id_idx" ON "employees"("position_id");
-
--- CreateIndex
 CREATE INDEX "employees_work_leader_id_idx" ON "employees"("work_leader_id");
 
 -- CreateIndex
@@ -364,6 +365,9 @@ CREATE INDEX "invoices_invoice_period_id_idx" ON "invoices"("invoice_period_id")
 
 -- CreateIndex
 CREATE INDEX "invoices_work_leader_id_idx" ON "invoices"("work_leader_id");
+
+-- CreateIndex
+CREATE INDEX "invoices_employee_id_idx" ON "invoices"("employee_id");
 
 -- CreateIndex
 CREATE INDEX "invoice_relates_invoice_id_idx" ON "invoice_relates"("invoice_id");
@@ -423,7 +427,13 @@ CREATE INDEX "positions_is_active_idx" ON "positions"("is_active");
 CREATE INDEX "wage_rates_employee_id_idx" ON "wage_rates"("employee_id");
 
 -- CreateIndex
+CREATE INDEX "wage_rates_employee_id_effective_from_idx" ON "wage_rates"("employee_id", "effective_from");
+
+-- CreateIndex
 CREATE INDEX "wage_rates_position_id_idx" ON "wage_rates"("position_id");
+
+-- CreateIndex
+CREATE INDEX "wage_rates_position_id_effective_from_idx" ON "wage_rates"("position_id", "effective_from");
 
 -- CreateIndex
 CREATE INDEX "wage_rates_effective_from_idx" ON "wage_rates"("effective_from");
@@ -444,13 +454,19 @@ CREATE UNIQUE INDEX "bill_rates_contract_id_position_id_key" ON "bill_rates"("co
 CREATE INDEX "time_sheets_work_leader_id_idx" ON "time_sheets"("work_leader_id");
 
 -- CreateIndex
+CREATE INDEX "time_sheets_employee_id_idx" ON "time_sheets"("employee_id");
+
+-- CreateIndex
 CREATE INDEX "time_sheets_work_date_idx" ON "time_sheets"("work_date");
+
+-- CreateIndex
+CREATE INDEX "time_sheets_month_period_idx" ON "time_sheets"("month_period");
 
 -- CreateIndex
 CREATE INDEX "time_sheets_status_idx" ON "time_sheets"("status");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "time_sheets_work_leader_id_work_date_key" ON "time_sheets"("work_leader_id", "work_date");
+CREATE INDEX "time_sheets_sheet_type_idx" ON "time_sheets"("sheet_type");
 
 -- CreateIndex
 CREATE INDEX "time_entries_time_sheet_id_idx" ON "time_entries"("time_sheet_id");
@@ -510,10 +526,7 @@ CREATE INDEX "work_leaders_is_active_idx" ON "work_leaders"("is_active");
 ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_changed_by_fkey" FOREIGN KEY ("changed_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "employees" ADD CONSTRAINT "employees_position_id_fkey" FOREIGN KEY ("position_id") REFERENCES "positions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "employees" ADD CONSTRAINT "employees_work_leader_id_fkey" FOREIGN KEY ("work_leader_id") REFERENCES "work_leaders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "employees" ADD CONSTRAINT "employees_work_leader_id_fkey" FOREIGN KEY ("work_leader_id") REFERENCES "work_leaders"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "invoice_periods" ADD CONSTRAINT "invoice_periods_branch_id_fkey" FOREIGN KEY ("branch_id") REFERENCES "branches"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -525,7 +538,10 @@ ALTER TABLE "invoice_periods" ADD CONSTRAINT "invoice_periods_contract_id_fkey" 
 ALTER TABLE "invoices" ADD CONSTRAINT "invoices_invoice_period_id_fkey" FOREIGN KEY ("invoice_period_id") REFERENCES "invoice_periods"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "invoices" ADD CONSTRAINT "invoices_work_leader_id_fkey" FOREIGN KEY ("work_leader_id") REFERENCES "work_leaders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_work_leader_id_fkey" FOREIGN KEY ("work_leader_id") REFERENCES "work_leaders"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_employee_id_fkey" FOREIGN KEY ("employee_id") REFERENCES "employees"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "invoice_relates" ADD CONSTRAINT "invoice_relates_invoice_id_fkey" FOREIGN KEY ("invoice_id") REFERENCES "invoices"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -558,7 +574,10 @@ ALTER TABLE "bill_rates" ADD CONSTRAINT "bill_rates_contract_id_fkey" FOREIGN KE
 ALTER TABLE "bill_rates" ADD CONSTRAINT "bill_rates_position_id_fkey" FOREIGN KEY ("position_id") REFERENCES "positions"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "time_sheets" ADD CONSTRAINT "time_sheets_work_leader_id_fkey" FOREIGN KEY ("work_leader_id") REFERENCES "work_leaders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "time_sheets" ADD CONSTRAINT "time_sheets_work_leader_id_fkey" FOREIGN KEY ("work_leader_id") REFERENCES "work_leaders"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "time_sheets" ADD CONSTRAINT "time_sheets_employee_id_fkey" FOREIGN KEY ("employee_id") REFERENCES "employees"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "time_sheets" ADD CONSTRAINT "time_sheets_create_by_fkey" FOREIGN KEY ("create_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

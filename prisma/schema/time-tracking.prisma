@@ -5,6 +5,12 @@ enum TimeSheetStatus {
     LOCKED    // ล็อคแล้ว
 }
 
+// ประเภทใบเซ็นชื่อ
+enum TimeSheetType {
+    DAILY    // รายวัน (Worker)
+    MONTHLY  // รายเดือน (Driver)
+}
+
 // ประเภทการทำงานใน TimeEntry
 enum WorkType {
     REGULAR       // เวลาปกติ
@@ -12,26 +18,41 @@ enum WorkType {
     ACCOMMODATION // ค่าที่พัก
 }
 
-// ใบเซ็นชื่อ (1 หัวหน้างาน + 1 วัน = 1 ใบ)
+// ใบเซ็นชื่อ (Unified: Worker รายวัน, Driver รายเดือน)
 model TimeSheet {
     id              Int             @id @default(autoincrement())
-    workLeaderId    Int             @map("work_leader_id")
-    workDate        DateTime        @map("work_date")      // วันทำงาน
+
+    // Worker fields (DAILY)
+    workLeaderId    Int?            @map("work_leader_id")
+    workDate        DateTime?       @map("work_date")
+
+    // Driver fields (MONTHLY)
+    employeeId      Int?            @map("employee_id")
+    monthPeriod     String?         @map("month_period")    // "YYYY-MM"
+
+    sheetType       TimeSheetType   @default(DAILY) @map("sheet_type")
     status          TimeSheetStatus @default(PENDING) @map("status")
     createBy        Int             @map("create_by")      // user ที่สร้าง
+
+    // ไฟล์แนบ (JSON array ของ S3 paths)
+    files           Json?           @map("files")
 
     createdAt       DateTime        @default(now()) @map("created_at")
     updatedAt       DateTime?       @updatedAt @map("updated_at")
 
     // relations
-    workLeader      WorkLeader      @relation(fields: [workLeaderId], references: [id])
+    workLeader      WorkLeader?     @relation(fields: [workLeaderId], references: [id])
+    employee        Employee?       @relation(fields: [employeeId], references: [id])
     creator         User            @relation(fields: [createBy], references: [id])
     timeEntries     TimeEntry[]
 
-    @@unique([workLeaderId, workDate])  // 1 หัวหน้า + 1 วัน = 1 ใบ
+    // Indexes
     @@index([workLeaderId])
+    @@index([employeeId])
     @@index([workDate])
+    @@index([monthPeriod])
     @@index([status])
+    @@index([sheetType])
     @@map("time_sheets")
 }
 
@@ -44,10 +65,10 @@ model TimeEntry {
 
     // เวลาทำงาน
     startTime       DateTime        @map("start_time")
-    endTime         DateTime        @map("end_time")
-    shiftType       ShiftType       @map("shift_type")     // REGULAR, SHIFT - ระบุว่าทำงานแบบไหนในวันนั้น
+    endTime         DateTime?       @map("end_time")
+    shiftType       ShiftType       @map("shift_type")     // REGULAR, SHIFT - ระบุว่าทำงานแบบไหนในวันนั้น โดย REGULAR จะต้องหักชั่วโมงพักกลางวัน
     workType        WorkType        @map("work_type")      // REGULAR, OVERTIME, ACCOMMODATION
-    otRate          Int             @default(0) @map("ot_rate")    // ตัวคูณ OT (1, 1.5, 2, ...)
+    otRate          Decimal         @default(0) @map("ot_rate") @db.Decimal(3,1)          // ตัวคูณ OT (1, 1.5, 2, ...)
     accommodation   Decimal         @default(0) @map("accommodation") @db.Decimal(12, 2)  // ค่าที่พัก
 
     // สถานะ
