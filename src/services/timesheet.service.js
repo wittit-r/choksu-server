@@ -137,8 +137,16 @@ class TimeSheetService {
                         conflicts.push({
                             type: 'INTERNAL_OVERLAP',
                             employeeId: Number(employeeId),
-                            entry1: { timeIn: a.timeIn, timeOut: a.timeOut },
-                            entry2: { timeIn: b.timeIn, timeOut: b.timeOut },
+                            entry1: {
+                                date: a.startTime.toISOString().split('T')[0],
+                                timeIn: a.timeIn,
+                                timeOut: a.timeOut,
+                            },
+                            entry2: {
+                                date: b.startTime.toISOString().split('T')[0],
+                                timeIn: b.timeIn,
+                                timeOut: b.timeOut,
+                            },
                         });
                     }
                 }
@@ -201,7 +209,12 @@ class TimeSheetService {
                         conflicts.push({
                             type: 'DATABASE_OVERLAP',
                             employeeId: Number(employeeId),
-                            newEntry: { timeIn: entry.timeIn, timeOut: entry.timeOut },
+                            date: entry.startTime.toISOString().split('T')[0],
+                            newEntry: {
+                                date: entry.startTime.toISOString().split('T')[0],
+                                timeIn: entry.timeIn,
+                                timeOut: entry.timeOut,
+                            },
                             conflictingEntry: {
                                 id: existing.id,
                                 startTime: existing.startTime,
