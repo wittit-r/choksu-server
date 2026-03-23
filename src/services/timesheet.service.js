@@ -1,6 +1,6 @@
 import prisma from "../databases/prisma.js";
 import err from "../utils/error.js";
-import { combineDateAndTime } from "../utils/date.js";
+import { combineDateAndTime, toLocalDate } from "../utils/date.js";
 import prismaSelectDefault from "../utils/prismaSelectDefault.js";
 
 /**
@@ -138,12 +138,12 @@ class TimeSheetService {
                             type: 'INTERNAL_OVERLAP',
                             employeeId: Number(employeeId),
                             entry1: {
-                                date: a.startTime.toISOString().split('T')[0],
+                                date: toLocalDate(a.startTime),
                                 timeIn: a.timeIn,
                                 timeOut: a.timeOut,
                             },
                             entry2: {
-                                date: b.startTime.toISOString().split('T')[0],
+                                date: toLocalDate(b.startTime),
                                 timeIn: b.timeIn,
                                 timeOut: b.timeOut,
                             },
@@ -209,9 +209,9 @@ class TimeSheetService {
                         conflicts.push({
                             type: 'DATABASE_OVERLAP',
                             employeeId: Number(employeeId),
-                            date: entry.startTime.toISOString().split('T')[0],
+                            date: toLocalDate(entry.startTime),
                             newEntry: {
-                                date: entry.startTime.toISOString().split('T')[0],
+                                date: toLocalDate(entry.startTime),
                                 timeIn: entry.timeIn,
                                 timeOut: entry.timeOut,
                             },
@@ -285,7 +285,7 @@ class TimeSheetService {
 
         // Check duplicates with database
         const existingDates = new Set(
-            existingEntries.map((e) => e.startTime.toISOString().split('T')[0])
+            existingEntries.map((e) => toLocalDate(e.startTime))
         );
 
         const duplicates = [];
@@ -1044,7 +1044,7 @@ class TimeSheetService {
         // Handle time updates (เฉพาะ REGULAR และ OVERTIME)
         if (entry.workType !== 'ACCOMMODATION') {
             if (data.timeIn !== undefined || data.timeOut !== undefined) {
-                const dateStr = entry.startTime.toISOString().split('T')[0];
+                const dateStr = toLocalDate(entry.startTime);
                 finalStartTime = data.timeIn ? combineDateAndTime(dateStr, data.timeIn) : entry.startTime;
                 finalEndTime = data.timeOut ? combineDateAndTime(dateStr, data.timeOut) : entry.endTime;
 
