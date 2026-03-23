@@ -162,6 +162,34 @@ class EmployeeController {
         });
     }
 
+    getTimeEntries = async (req, res) => {
+        const { employeeId } = validate(
+            req.params,
+            Joi.object({
+                employeeId: Joi.number().integer().required(),
+            }),
+        );
+
+        const query = validate(
+            req.query,
+            Joi.object({
+                startDate: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
+                endDate: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
+            }),
+        );
+
+        const { data, summary } = await employeeService.getTimeEntries({
+            employeeId,
+            ...query,
+        });
+
+        res.status(200).json({
+            success: true,
+            data,
+            summary,
+        });
+    }
+
     updateWage = async (req, res) => {
         const { employeeId, id } = validate(
             req.params,

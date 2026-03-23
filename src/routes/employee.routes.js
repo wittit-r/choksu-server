@@ -18,4 +18,7 @@ router.get("/:employeeId/wages", auth, wrap(employeeController.getWages));
 router.post("/:employeeId/wages", auth, wrap(employeeController.createWage));
 router.patch("/:employeeId/wages/:id", auth, wrap(employeeController.updateWage));
 
+// Time attendance routes
+router.get("/:employeeId/time-entries", auth, wrap(employeeController.getTimeEntries));
+
 export default router;
