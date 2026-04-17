@@ -75,6 +75,10 @@ model TimeEntry {
     isNegative      Boolean         @default(false) @map("is_negative")  // รายการติดลบ
     lockFlag        Boolean         @default(false) @map("lock_flag")
 
+    // อ้างอิง (สำหรับ correction entry)
+    referenceEntryId Int?           @map("reference_entry_id")  // ID ของ entry เดิมที่แก้ไข
+    createBy        Int?            @map("create_by")           // user ที่สร้าง (สำหรับ correction)
+
     // ยอดที่จ่าย (snapshot)
     paidValue       Decimal?        @map("paid_value") @db.Decimal(12, 2)
     paidDate        DateTime?       @map("paid_date")
@@ -98,5 +102,6 @@ model TimeEntry {
     @@index([shiftType])
     @@index([workType])
     @@index([lockFlag])
+    @@index([referenceEntryId])
     @@map("time_entries")
 }

@@ -1,6 +1,6 @@
 import prisma from "../databases/prisma.js";
 import err from "../utils/error.js";
-import { combineDateAndTime, toLocalDate } from "../utils/date.js";
+import { combineDateAndTime, toLocalDate, toLocalTime } from "../utils/date.js";
 import prismaSelectDefault from "../utils/prismaSelectDefault.js";
 
 /**
@@ -725,6 +725,122 @@ class TimeSheetService {
         });
 
         return updated;
+    }
+
+    // ============================================
+    // Correction Methods (Negative Entry)
+    // ============================================
+
+    /**
+     * สร้าง negative TimeEntry สำหรับแก้ไขย้อนหลัง
+     * - ผูกกับ timesheet เดียวกันกับ entry เดิม
+     * - copy shiftType, workType, otRate จาก entry เดิม
+     * @param {number} timeSheetId - TimeSheet ID
+     * @param {Object} data - ข้อมูล correction
+     * @param {number} data.originalEntryId - ID ของ entry เดิมที่ต้องการแก้ไข
+     * @param {string} data.timeIn - เวลาเริ่มต้นของช่วงที่ต้องการหักล้าง
+     * @param {string} data.timeOut - เวลาสิ้นสุดของช่วงที่ต้องการหักล้าง
+     * @param {string} [data.note] - หมายเหตุ
+     * @param {number} data.createBy - User ID ที่สร้าง
+     * @returns {Promise<Object>} ข้อมูล TimeEntry ที่สร้าง
+     */
+    async createCorrectionTimeEntry(timeSheetId, data) {
+        // 1. Validate timesheet exists
+        const timeSheet = await prisma.timeSheet.findUnique({
+            where: { id: timeSheetId },
+            select: { id: true, status: true },
+        });
+
+        if (!timeSheet) {
+            throw err.notFound({ id: timeSheetId }, 'ไม่พบใบลงเวลา');
+        }
+
+        // 2. Find original entry
+        const originalEntry = await prisma.timeEntry.findUnique({
+            where: { id: data.originalEntryId },
+            select: {
+                id: true,
+                timeSheetId: true,
+                employeeId: true,
+                startTime: true,
+                endTime: true,
+                shiftType: true,
+                workType: true,
+                otRate: true,
+                paidValue: true,
+            },
+        });
+
+        if (!originalEntry) {
+            throw err.notFound({ originalEntryId: data.originalEntryId }, 'ไม่พบรายการเวลาเดิม');
+        }
+
+        if (originalEntry.timeSheetId !== timeSheetId) {
+            throw err.validation({ message: 'รายการเวลาเดิมไม่ได้อยู่ในใบลงเวลานี้' });
+        }
+
+        if (originalEntry.isNegative) {
+            throw err.validation({ message: 'ไม่สามารถแก้ไขรายการที่เป็นค่าติดลบได้' });
+        }
+
+        // 3. Check paid status
+        if (originalEntry.paidValue === null) {
+            throw err.validation({
+                message: 'รายการนี้ยังไม่ได้จ่ายเงิน กรุณาแก้ไขรายการเวลาโดยตรงแทนการทำ correction',
+            });
+        }
+
+        // 4. Build DateTime and validate containment
+        const startTime = combineDateAndTime(toLocalDate(originalEntry.startTime), data.timeIn);
+        const endTime = combineDateAndTime(toLocalDate(originalEntry.startTime), data.timeOut);
+
+        // Negative range must be within original entry's range
+        if (startTime < originalEntry.startTime || endTime > originalEntry.endTime) {
+            throw err.validation({
+                message: 'ช่วงเวลาต้องอยู่ภายในรายการเดิม (' +
+                    toLocalTime(originalEntry.startTime) + '-' +
+                    toLocalTime(originalEntry.endTime) + ')',
+            });
+        }
+
+        // 5. Validate no overlap with existing negative entries for this employee
+        const overlappingNegative = await prisma.timeEntry.findFirst({
+            where: {
+                employeeId: originalEntry.employeeId,
+                isNegative: true,
+                referenceEntryId: originalEntry.id,
+                startTime: { lt: endTime },
+                endTime: { gt: startTime },
+            },
+            select: { id: true, startTime: true, endTime: true },
+        });
+
+        if (overlappingNegative) {
+            throw err.conflict(
+                { existingNegativeEntry: overlappingNegative },
+                'มีรายการแก้ไขที่ซ้อนทับกับช่วงเวลานี้อยู่แล้ว'
+            );
+        }
+
+        // 6. Create negative entry
+        return prisma.timeEntry.create({
+            data: {
+                timeSheetId,
+                employeeId: originalEntry.employeeId,
+                startTime,
+                endTime,
+                shiftType: originalEntry.shiftType,
+                workType: originalEntry.workType,
+                otRate: originalEntry.otRate,
+                accommodation: 0,
+                isNegative: true,
+                lockFlag: false,
+                referenceEntryId: originalEntry.id,
+                createBy: data.createBy,
+                note: data.note || null,
+            },
+            select: prismaSelectDefault.timeEntry,
+        });
     }
 
     /**
