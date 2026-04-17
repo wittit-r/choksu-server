@@ -26,6 +26,9 @@ router.patch("/:id/time-entries/:entryId/driver", auth, wrap(timeSheetController
 // Delete (ใช้ร่วมกันได้)
 router.delete("/:id/time-entries/:entryId", auth, wrap(timeSheetController.deleteTimeEntry));
 
+// Correction TimeEntry (แก้ไขย้อนหลัง)
+router.post("/:id/time-entries/correction", auth, wrap(timeSheetController.createCorrectionTimeEntry));
+
 // File management
 router.post("/:id/files", auth, wrap(timeSheetController.addFile));
 router.delete("/:id/files/:filePath", auth, wrap(timeSheetController.removeFile));

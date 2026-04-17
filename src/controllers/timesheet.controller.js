@@ -457,6 +457,40 @@ class TimeSheetController {
             data: result,
         });
     };
+
+    /**
+     * Create Correction TimeEntry (Negative Entry)
+     * POST /timesheets/:id/time-entries/correction
+     */
+    createCorrectionTimeEntry = async (req, res) => {
+        const { id } = validate(
+            req.params,
+            Joi.object({
+                id: Joi.number().integer().required(),
+            }),
+        );
+
+        const body = validate(
+            req.body,
+            Joi.object({
+                originalEntryId: Joi.number().integer().required(),
+                timeIn: Joi.time().required(),
+                timeOut: Joi.time().required(),
+                note: Joi.string().allow(null),
+            }).custom(validateTimeOrder),
+        );
+
+        const entry = await timeSheetService.createCorrectionTimeEntry(id, {
+            ...body,
+            createBy: req.user?.userId,
+        });
+
+        res.status(201).json({
+            success: true,
+            data: entry,
+        });
+    };
+
 }
 
 export default new TimeSheetController();
