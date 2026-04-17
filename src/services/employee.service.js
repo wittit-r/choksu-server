@@ -1,6 +1,7 @@
 import prisma from "../databases/prisma.js";
 import err from "../utils/error.js";
 import prismaSelectDefault from "../utils/prismaSelectDefault.js";
+import { combineDateAndTime, toLocalDate, toLocalTime, formatMinutesToHours } from "../utils/date.js";
 
 /**
  * @typedef {Object} PaginationResult
@@ -538,6 +539,151 @@ class EmployeeService {
         });
 
         return wage;
+    }
+
+    /**
+     * ดึงข้อมูลการลงเวลาของพนักงานตามช่วงวันที่
+     * @param {Object} params - Parameters
+     * @param {number} params.employeeId - Employee ID
+     * @param {string} params.startDate - วันที่เริ่มต้น (YYYY-MM-DD)
+     * @param {string} params.endDate - วันที่สิ้นสุด (YYYY-MM-DD)
+     * @returns {Promise<{data: Array, summary: Object}>} ข้อมูลการลงเวลาและสรุป
+     * @throws {AppError} ไม่พบพนักงาน (notFound)
+     */
+    async getTimeEntries({ employeeId, startDate, endDate }) {
+        const startOfDay = combineDateAndTime(startDate, '00:00:00');
+        const endOfDay = combineDateAndTime(endDate, '23:59:59');
+        const timeEntries = await prisma.timeEntry.findMany({
+            where: {
+                employeeId,
+                startTime: {
+                    gte: startOfDay,
+                    lte: endOfDay,
+                },
+                workType: {
+                    in: ['REGULAR', 'OVERTIME'],
+                },
+                isNegative: false,
+            },
+            select: {
+                startTime: true,
+                endTime: true,
+                workType: true,
+                shiftType: true,
+                otRate: true,
+            },
+            orderBy: {
+                startTime: 'asc',
+            },
+        });
+
+        // Pre-fill all dates in the range
+        const groupedByDate = {};
+        const currentDate = combineDateAndTime(startDate, '00:00:00');
+        const lastDate = combineDateAndTime(endDate, '00:00:00');
+        while (currentDate <= lastDate) {
+            const dateKey = toLocalDate(currentDate);
+            groupedByDate[dateKey] = { date: dateKey, regular: [], ot: [] };
+            currentDate.setDate(currentDate.getDate() + 1);
+        }
+
+        // Group entries by date
+        for (const entry of timeEntries) {
+            const dateKey = toLocalDate(entry.startTime);
+
+            const timeRangeStart = toLocalTime(entry.startTime);
+
+            let timeRangeEnd = '';
+            let totalMinutes = 0;
+
+            if (entry.endTime) {
+                timeRangeEnd = toLocalTime(entry.endTime);
+                totalMinutes = Math.round(
+                    (entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60),
+                );
+            }
+
+            const timeRange = `${timeRangeStart} - ${timeRangeEnd}`;
+
+            if (entry.workType === 'REGULAR') {
+                // หากเป็น REGULAR shift ต้องหักเวลาพักเที่ยง 12:00-13:00 (60 นาที)
+                // หากช่วงเวลาทำงานคร่อมช่วงพักเที่ยง
+                let effectiveMinutes = totalMinutes;
+                if (entry.shiftType === 'REGULAR' && entry.endTime) {
+                    const lunchStart = 12 * 60; // 12:00 = 720 นาที
+                    const lunchEnd = 13 * 60;   // 13:00 = 780 นาที
+                    const startMinutes = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
+                    const endMinutes = entry.endTime.getHours() * 60 + entry.endTime.getMinutes();
+                    const overlapStart = Math.max(startMinutes, lunchStart);
+                    const overlapEnd = Math.min(endMinutes, lunchEnd);
+                    if (overlapStart < overlapEnd) {
+                        effectiveMinutes -= (overlapEnd - overlapStart);
+                    }
+                }
+                const days = Math.floor((effectiveMinutes / 480) * 100) / 100;
+                groupedByDate[dateKey].regular.push({
+                    startTime: entry.startTime,
+                    endTime: entry.endTime,
+                    timeRange,
+                    days,
+                    totalMinutes: effectiveMinutes,
+                });
+            } else if (entry.workType === 'OVERTIME') {
+                const rate = entry.otRate ? Number(entry.otRate) : 1;
+                groupedByDate[dateKey].ot.push({
+                    startTime: entry.startTime,
+                    endTime: entry.endTime,
+                    timeRange,
+                    duration: formatMinutesToHours(totalMinutes),
+                    totalMinutes,
+                    rate,
+                });
+            }
+        }
+
+        // Sort days ascending by date
+        const data = Object.values(groupedByDate).sort((a, b) => a.date.localeCompare(b.date));
+
+        // Calculate summary
+        let totalDays = 0;
+        let totalOtMinutes = 0;
+        const totalOtByRate = {};
+
+        for (const day of data) {
+            for (const regular of day.regular) {
+                totalDays += regular.days;
+            }
+
+            for (const ot of day.ot) {
+                totalOtMinutes += ot.totalMinutes;
+
+                const rateKey = String(ot.rate);
+                if (!totalOtByRate[rateKey]) {
+                    totalOtByRate[rateKey] = 0;
+                }
+                totalOtByRate[rateKey] += ot.totalMinutes;
+            }
+        }
+
+        const formattedOtByRate = {};
+        for (const rate of Object.keys(totalOtByRate)) {
+            formattedOtByRate[rate] = formatMinutesToHours(totalOtByRate[rate]);
+        }
+
+        const summary = {
+            totalDays: Math.floor(totalDays * 100) / 100,
+            totalOtHours: formatMinutesToHours(totalOtMinutes),
+            totalOtByRate: formattedOtByRate,
+        };
+
+        // Remove internal totalMinutes from response
+        const cleanData = data.map((day) => ({
+            date: day.date,
+            regular: day.regular.map(({ startTime, endTime, timeRange, days }) => ({ startTime, endTime, timeRange, days })),
+            ot: day.ot.map(({ startTime, endTime, timeRange, duration, rate }) => ({ startTime, endTime, timeRange, duration, rate })),
+        }));
+
+        return { data: cleanData, summary };
     }
 
     /**
