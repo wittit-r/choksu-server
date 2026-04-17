@@ -728,7 +728,7 @@ class TimeSheetService {
     }
 
     /**
-     * ลบ TimeSheet (เฉพาะะ PENDING เท่านั้น)
+     * ลบ TimeSheet (เฉพาะ PENDING เท่านั้น)
      * @param {number} id - TimeSheet ID
      * @throws {AppError} ไม่พบ TimeSheet หรือไม่ใช่สถานะ PENDING
      */
