@@ -547,7 +547,6 @@ class TimeSheetService {
                             otRate,
                             accommodation: 0,
                             isNegative: false,
-                            lockFlag: false,
                         },
                         select: prismaSelectDefault.timeEntry,
                     })
@@ -674,7 +673,6 @@ class TimeSheetService {
                             accommodation: entry.accommodation || 0,
                             shiftType: 'REGULAR',
                             isNegative: false,
-                            lockFlag: false,
                         },
                         select: prismaSelectDefault.timeEntry,
                     })
@@ -845,7 +843,6 @@ class TimeSheetService {
                 otRate: originalEntry.otRate,
                 accommodation: 0,
                 isNegative: true,
-                lockFlag: false,
                 referenceEntryId: originalEntry.id,
                 createBy: data.createBy,
                 note: data.note || null,
@@ -958,7 +955,6 @@ class TimeSheetService {
                 otRate: firstEntry.otRate,
                 accommodation: 0,
                 isNegative: false,
-                lockFlag: false,
                 note: data.note || null,
             },
             select: prismaSelectDefault.timeEntry,
@@ -1118,7 +1114,6 @@ class TimeSheetService {
                     otRate: data.otRate ?? 0,
                     accommodation: data.accommodation ?? 0,
                     isNegative: false,
-                    lockFlag: false,
                     note: data.note || null,
                 },
                 select: prismaSelectDefault.timeEntry,
@@ -1243,23 +1238,23 @@ class TimeSheetService {
         // 1. ตรวจสอบ entry มีอยู่และเป็นของ timesheet นี้
         const entry = await prisma.timeEntry.findUnique({
             where: { id: entryId },
-            select: { id: true, timeSheetId: true, isNegative: true, lockFlag: true },
+            select: { id: true, timeSheetId: true, isNegative: true, paidValue: true },
         });
 
         if (!entry || entry.timeSheetId !== timeSheetId) {
             throw err.notFound({ entryId }, 'ไม่พบรายการเวลา');
         }
 
-        // 2. ตรวจสอบ lockFlag (ทุกกรณีต้องไม่ถูกล็อครายการ)
-        if (entry.lockFlag) {
+        // 2. ตรวจสอบ paidDate (ทุกกรณีต้องยังไม่จ่ายเงิน)
+        if (entry.paidValue !== null) {
             throw err.validation({
-                message: 'รายการเวลาถูกล็อคแล้ว ไม่สามารถลบได้',
+                message: 'รายการเวลาจ่ายเงินแล้ว ไม่สามารถลบได้',
             });
         }
 
         // 3. ตรวจสอบสถานะ timesheet แยกตามประเภท entry
         if (entry.isNegative) {
-            // isNegative = true: ตรวจสอบเฉพาะ lockFlag ของ entry (ผ่านแล้วขั้นตอนที่ 2)
+            // isNegative = true: ตรวจสอบเฉพาะ paidDate ของ entry (ผ่านแล้วขั้นตอนที่ 2)
             // อนุญาตให้ลบได้แม้ timesheet จะ LOCKED เพราะอาจถูกสร้างหลัง lock
         } else {
             // isNegative = false: ตรวจสอบเพิ่มเติมว่า timesheet ต้องไม่ LOCKED

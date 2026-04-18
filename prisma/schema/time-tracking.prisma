@@ -73,7 +73,6 @@ model TimeEntry {
 
     // สถานะ
     isNegative      Boolean         @default(false) @map("is_negative")  // รายการติดลบ
-    lockFlag        Boolean         @default(false) @map("lock_flag")
 
     // อ้างอิง (สำหรับ correction entry)
     referenceEntryId Int?           @map("reference_entry_id")  // ID ของ entry เดิมที่แก้ไข
@@ -101,7 +100,6 @@ model TimeEntry {
     @@index([employeeId])
     @@index([shiftType])
     @@index([workType])
-    @@index([lockFlag])
     @@index([referenceEntryId])
     @@map("time_entries")
 }
