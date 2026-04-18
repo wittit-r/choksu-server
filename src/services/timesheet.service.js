@@ -440,6 +440,7 @@ class TimeSheetService {
                 },
                 timeEntries: {
                     select: prismaSelectDefault.timeEntry,
+                    orderBy: { id: 'asc' },
                 },
             },
         });
