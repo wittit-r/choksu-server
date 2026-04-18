@@ -223,6 +223,7 @@ class TimeSheetController {
             Joi.object({
                 timeIn: Joi.time().required(),
                 timeOut: Joi.time().required(),
+                shiftType: Joi.string().valid('REGULAR', 'SHIFT').required(),
                 note: Joi.string().allow(null),
             }).min(1).custom(validateTimeOrder),
         );

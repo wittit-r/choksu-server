@@ -1022,6 +1022,7 @@ class TimeSheetService {
             data: {
                 startTime,
                 endTime,
+                shiftType: data.shiftType,
                 note: data.note,
             },
             select: prismaSelectDefault.timeEntry,
@@ -1239,33 +1240,46 @@ class TimeSheetService {
      * @param {number} entryId - TimeEntry ID
      */
     async deleteTimeEntry(timeSheetId, entryId) {
-        // 1. ตรวจสอบ timesheet มีอยู่และไม่ได้ LOCKED
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id: timeSheetId },
-            select: { id: true, status: true },
-        });
-
-        if (!timeSheet) {
-            throw err.notFound({ id: timeSheetId }, 'ไม่พบ TimeSheet');
-        }
-
-        if (timeSheet.status === 'LOCKED') {
-            throw err.validation({
-                message: 'TimeSheet ถูกล็อคแล้ว ไม่สามารถลบได้',
-            });
-        }
-
-        // 2. ตรวจสอบ entry มีอยู่และเป็นของ timesheet นี้
+        // 1. ตรวจสอบ entry มีอยู่และเป็นของ timesheet นี้
         const entry = await prisma.timeEntry.findUnique({
             where: { id: entryId },
-            select: { id: true, timeSheetId: true },
+            select: { id: true, timeSheetId: true, isNegative: true, lockFlag: true },
         });
 
         if (!entry || entry.timeSheetId !== timeSheetId) {
             throw err.notFound({ entryId }, 'ไม่พบรายการเวลา');
         }
 
-        // 3. Delete entry
+        // 2. ตรวจสอบ lockFlag (ทุกกรณีต้องไม่ถูกล็อครายการ)
+        if (entry.lockFlag) {
+            throw err.validation({
+                message: 'รายการเวลาถูกล็อคแล้ว ไม่สามารถลบได้',
+            });
+        }
+
+        // 3. ตรวจสอบสถานะ timesheet แยกตามประเภท entry
+        if (entry.isNegative) {
+            // isNegative = true: ตรวจสอบเฉพาะ lockFlag ของ entry (ผ่านแล้วขั้นตอนที่ 2)
+            // อนุญาตให้ลบได้แม้ timesheet จะ LOCKED เพราะอาจถูกสร้างหลัง lock
+        } else {
+            // isNegative = false: ตรวจสอบเพิ่มเติมว่า timesheet ต้องไม่ LOCKED
+            const timeSheet = await prisma.timeSheet.findUnique({
+                where: { id: timeSheetId },
+                select: { id: true, status: true },
+            });
+
+            if (!timeSheet) {
+                throw err.notFound({ id: timeSheetId }, 'ไม่พบ TimeSheet');
+            }
+
+            if (timeSheet.status === 'LOCKED') {
+                throw err.validation({
+                    message: 'TimeSheet ถูกล็อคแล้ว ไม่สามารถลบได้',
+                });
+            }
+        }
+
+        // 4. Delete entry
         await prisma.timeEntry.delete({ where: { id: entryId } });
     }
 
