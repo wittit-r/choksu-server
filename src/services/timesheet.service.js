@@ -344,6 +344,13 @@ class TimeSheetService {
             where.monthPeriod = query.monthPeriod;
         }
 
+        if (query.startDate && query.endDate) {
+            where.workDate = {
+                gte: combineDateAndTime(query.startDate, '00:00:00'),
+                lte: combineDateAndTime(query.endDate, '23:59:59'),
+            };
+        }
+
         const [timeSheets, total] = await Promise.all([
             prisma.timeSheet.findMany({
                 where,
@@ -367,7 +374,11 @@ class TimeSheetService {
                         },
                     },
                     _count: {
-                        select: { timeEntries: true },
+                        select: {
+                            timeEntries: {
+                                where: { isNegative: false },
+                            },
+                        },
                     },
                 },
                 skip: (page - 1) * limit,
