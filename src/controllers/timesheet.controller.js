@@ -10,7 +10,7 @@ import timeSheetService from "../services/timesheet.service.js";
 const validateWorkTypeRules = (value, helpers) => {
     const { workType, otRate, accommodation, timeIn, timeOut } = value;
 
-    const hasTime = timeIn !== undefined && timeOut !== undefined;
+    const hasTime = timeIn != null && timeOut != null;
 
     if (workType === 'REGULAR' || workType === undefined) {
         if (otRate !== undefined && otRate !== 0) {
@@ -254,9 +254,8 @@ class TimeSheetController {
         );
 
         const body = validate(
-            req.body, 
+            req.body,
             Joi.object({
-                employeeId: Joi.number().integer().required(),
                 date: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
                 timeIn: Joi.time().allow(null),
                 timeOut: Joi.time().allow(null),

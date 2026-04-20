@@ -1041,7 +1041,10 @@ class TimeSheetService {
         // 1. Validate timesheet เป็น MONTHLY (read-only checks, ไม่ต้องใส่ transaction)
         const timeSheet = await prisma.timeSheet.findUnique({
             where: { id: timeSheetId },
-            select: prismaSelectDefault.timeSheet,
+            select: {
+                ...prismaSelectDefault.timeSheet,
+                employeeId: true,
+            },
         });
 
         if (!timeSheet) {
@@ -1056,19 +1059,7 @@ class TimeSheetService {
             throw err.validation({ message: 'ใบลงเวลาถูกล็อคแล้ว ไม่สามารถเพิ่มรายการได้' });
         }
 
-        // 2. Validate employee exists and match with timeSheet
-        const employee = await prisma.employee.findUnique({
-            where: { id: data.employeeId },
-            select: { id: true },
-        });
-        if (!employee) {
-            throw err.notFound({ employeeId: data.employeeId }, 'ไม่พบพนักงาน');
-        }
-        if (data.employeeId !== timeSheet.employeeId) {
-            throw err.validation({ message: 'พนักงานไม่ตรงกับใบลงเวลา' });
-        }
-
-        // 3. Execute validation + create in transaction
+        // 2. Execute validation + create in transaction
         return prisma.$transaction(async (tx) => {
             // Build DateTime based on workType
             let startTime = null;
@@ -1080,7 +1071,7 @@ class TimeSheetService {
 
                 // Validate no duplicate accommodation
                 await this._validateNoAccommodationDuplicates(
-                    data.employeeId,
+                    timeSheet.employeeId,
                     timeSheet.monthPeriod,
                     [data.date],
                     [],
@@ -1092,7 +1083,7 @@ class TimeSheetService {
 
                 // Validate no overlaps
                 await this._validateNoOverlaps([{
-                    employeeId: data.employeeId,
+                    employeeId: timeSheet.employeeId,
                     startTime,
                     endTime,
                     timeIn: data.timeIn,
@@ -1107,7 +1098,7 @@ class TimeSheetService {
             return tx.timeEntry.create({
                 data: {
                     timeSheetId,
-                    employeeId: data.employeeId,
+                    employeeId: timeSheet.employeeId,
                     startTime,
                     endTime,
                     shiftType: 'REGULAR',
@@ -1153,7 +1144,10 @@ class TimeSheetService {
         // 2. Validate entry
         const entry = await prisma.timeEntry.findUnique({
             where: { id: entryId },
-            select: prismaSelectDefault.timeEntry,
+            select: {
+                ...prismaSelectDefault.timeEntry,
+                timeSheetId: true,
+            },
         });
 
         if (!entry || entry.timeSheetId !== timeSheetId) {
