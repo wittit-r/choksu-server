@@ -561,7 +561,7 @@ class EmployeeService {
                     lte: endOfDay,
                 },
                 workType: {
-                    in: ['REGULAR', 'OVERTIME'],
+                    in: ['REGULAR', 'OVERTIME', 'ACCOMMODATION'],
                 },
                 isNegative: false,
             },
@@ -571,6 +571,8 @@ class EmployeeService {
                 workType: true,
                 shiftType: true,
                 otRate: true,
+                accommodation: true,
+                paidValue: true,
             },
             orderBy: {
                 startTime: 'asc',
@@ -583,7 +585,7 @@ class EmployeeService {
         const lastDate = combineDateAndTime(endDate, '00:00:00');
         while (currentDate <= lastDate) {
             const dateKey = toLocalDate(currentDate);
-            groupedByDate[dateKey] = { date: dateKey, regular: [], ot: [] };
+            groupedByDate[dateKey] = { date: dateKey, regular: [], ot: [], accommodation: [] };
             currentDate.setDate(currentDate.getDate() + 1);
         }
 
@@ -627,6 +629,7 @@ class EmployeeService {
                     timeRange,
                     days,
                     totalMinutes: effectiveMinutes,
+                    paidValue: entry.paidValue,
                 });
             } else if (entry.workType === 'OVERTIME') {
                 const rate = entry.otRate ? Number(entry.otRate) : 1;
@@ -637,6 +640,12 @@ class EmployeeService {
                     duration: formatMinutesToHours(totalMinutes),
                     totalMinutes,
                     rate,
+                    paidValue: entry.paidValue,
+                });
+            } else if (entry.workType === 'ACCOMMODATION') {
+                groupedByDate[dateKey].accommodation.push({
+                    accommodation: Number(entry.accommodation),
+                    paidValue: entry.paidValue,
                 });
             }
         }
@@ -665,6 +674,11 @@ class EmployeeService {
             }
         }
 
+        let totalAccommodation = 0;
+        for (const day of data) {
+            totalAccommodation += day.accommodation.length;
+        }
+
         const formattedOtByRate = {};
         for (const rate of Object.keys(totalOtByRate)) {
             formattedOtByRate[rate] = formatMinutesToHours(totalOtByRate[rate]);
@@ -674,13 +688,15 @@ class EmployeeService {
             totalDays: Math.floor(totalDays * 100) / 100,
             totalOtHours: formatMinutesToHours(totalOtMinutes),
             totalOtByRate: formattedOtByRate,
+            totalAccommodation,
         };
 
         // Remove internal totalMinutes from response
         const cleanData = data.map((day) => ({
             date: day.date,
-            regular: day.regular.map(({ startTime, endTime, timeRange, days }) => ({ startTime, endTime, timeRange, days })),
-            ot: day.ot.map(({ startTime, endTime, timeRange, duration, rate }) => ({ startTime, endTime, timeRange, duration, rate })),
+            regular: day.regular.map(({ startTime, endTime, timeRange, days, paidValue }) => ({ startTime, endTime, timeRange, days, paidValue })),
+            ot: day.ot.map(({ startTime, endTime, timeRange, duration, rate, paidValue }) => ({ startTime, endTime, timeRange, duration, rate, paidValue })),
+            accommodation: day.accommodation.map(({ accommodation, paidValue }) => ({ accommodation, paidValue })),
         }));
 
         return { data: cleanData, summary };
