@@ -573,6 +573,7 @@ class EmployeeService {
                 otRate: true,
                 accommodation: true,
                 paidValue: true,
+                paidDate: true,
             },
             orderBy: {
                 startTime: 'asc',
@@ -630,6 +631,7 @@ class EmployeeService {
                     days,
                     totalMinutes: effectiveMinutes,
                     paidValue: entry.paidValue,
+                    paidDate: entry.paidDate,
                 });
             } else if (entry.workType === 'OVERTIME') {
                 const rate = entry.otRate ? Number(entry.otRate) : 1;
@@ -641,11 +643,13 @@ class EmployeeService {
                     totalMinutes,
                     rate,
                     paidValue: entry.paidValue,
+                    paidDate: entry.paidDate,
                 });
             } else if (entry.workType === 'ACCOMMODATION') {
                 groupedByDate[dateKey].accommodation.push({
                     accommodation: Number(entry.accommodation),
                     paidValue: entry.paidValue,
+                    paidDate: entry.paidDate,
                 });
             }
         }
@@ -694,9 +698,9 @@ class EmployeeService {
         // Remove internal totalMinutes from response
         const cleanData = data.map((day) => ({
             date: day.date,
-            regular: day.regular.map(({ startTime, endTime, timeRange, days, paidValue }) => ({ startTime, endTime, timeRange, days, paidValue })),
-            ot: day.ot.map(({ startTime, endTime, timeRange, duration, rate, paidValue }) => ({ startTime, endTime, timeRange, duration, rate, paidValue })),
-            accommodation: day.accommodation.map(({ accommodation, paidValue }) => ({ accommodation, paidValue })),
+            regular: day.regular.map(({ startTime, endTime, timeRange, days, paidValue, paidDate }) => ({ startTime, endTime, timeRange, days, paidValue, paidDate })),
+            ot: day.ot.map(({ startTime, endTime, timeRange, duration, rate, paidValue, paidDate }) => ({ startTime, endTime, timeRange, duration, rate, paidValue, paidDate })),
+            accommodation: day.accommodation.map(({ accommodation, paidValue, paidDate }) => ({ accommodation, paidValue, paidDate })),
         }));
 
         return { data: cleanData, summary };
@@ -762,6 +766,284 @@ class EmployeeService {
         });
 
         return updated;
+    }
+
+    /**
+     * คำนวณยอดจ่ายเพิ่มย้อนหลังจากการเปลี่ยนแปลงอัตราค่าจ้าง
+     * สำหรับพนักงานทุกคนที่มีรายการจ่ายในช่วงเวลาที่กำหนด
+     * @param {Object} params
+     * @param {string} params.startDate - วันที่เริ่มต้น (YYYY-MM-DD)
+     * @param {string} params.endDate - วันที่สิ้นสุด (YYYY-MM-DD)
+     * @returns {Promise<Array>} รายการพนักงานพร้อมรายละเอียดส่วนต่าง
+     */
+    async calculateRetroactive({ startDate, endDate }) {
+        const startOfDay = combineDateAndTime(startDate, '00:00:00');
+        const endOfDay = combineDateAndTime(endDate, '23:59:59');
+
+        // Step 1: ดึง paid entries ทั้งหมดในช่วงเวลา (REGULAR, OVERTIME เท่านั้น)
+        const paidEntries = await prisma.timeEntry.findMany({
+            where: {
+                startTime: { gte: startOfDay, lte: endOfDay },
+                workType: { in: ['REGULAR', 'OVERTIME'] },
+                paidDate: { not: null },
+                isNegative: false,
+                isRetro: false,
+            },
+            select: {
+                id: true,
+                timeSheetId: true,
+                employeeId: true,
+                startTime: true,
+                endTime: true,
+                workType: true,
+                shiftType: true,
+                otRate: true,
+                paidValue: true,
+            },
+            orderBy: { startTime: 'asc' },
+        });
+        if (paidEntries.length === 0) {
+            return { data: [], summary: { totalEmployees: 0, totalDiff: 0 } };
+        }
+
+        // Extract unique employeeIds
+        const uniqueEmployeeIds = [...new Set(paidEntries.map(e => e.employeeId))];
+
+        // Step 2: ดึง employee info + current wage rate สำหรับแต่ละคน
+        const now = new Date();
+        const employees = await prisma.employee.findMany({
+            where: { id: { in: uniqueEmployeeIds } },
+            select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                wageRates: {
+                    where: {
+                        effectiveFrom: { lte: now },
+                        OR: [
+                            { effectiveTo: null },
+                            { effectiveTo: { gte: now } },
+                        ],
+                    },
+                    select: {
+                        id: true,
+                        dailyRate: true,
+                        position: {
+                            select: { employeeType: true },
+                        },
+                    },
+                    take: 1,
+                    orderBy: { effectiveFrom: 'desc' },
+                },
+            },
+        });
+
+        // ดึง negative entries และ retro entries ที่มีอยู่แล้ว (เพื่อเช็คซ้ำ)
+        const originalIds = paidEntries.map(e => e.id);
+        const [negativeEntries, existingRetroEntries] = await Promise.all([
+            prisma.timeEntry.findMany({
+                where: {
+                    referenceEntryId: { in: originalIds },
+                    isNegative: true,
+                },
+                select: {
+                    id: true,
+                    referenceEntryId: true,
+                    paidValue: true,
+                    startTime: true,
+                    endTime: true,
+                    workType: true,
+                    shiftType: true,
+                },
+            }),
+            prisma.timeEntry.findMany({
+                where: {
+                    referenceEntryId: { in: originalIds },
+                    isRetro: true,
+                },
+                select: {
+                    id: true,
+                    referenceEntryId: true,
+                },
+            }),
+        ]);
+
+        // Map existing retro entries สำหรับเช็คซ้ำ
+        const existingRetroMap = new Map(existingRetroEntries.map(r => [r.referenceEntryId, r.id]));
+
+        // Group negative entries by referenceEntryId
+        const negativeByOriginal = new Map();
+        for (const neg of negativeEntries) {
+            if (!negativeByOriginal.has(neg.referenceEntryId)) {
+                negativeByOriginal.set(neg.referenceEntryId, []);
+            }
+            negativeByOriginal.get(neg.referenceEntryId).push(neg);
+        }
+
+        // Group paid entries by employeeId
+        const entriesByEmployee = new Map();
+        for (const entry of paidEntries) {
+            if (!entriesByEmployee.has(entry.employeeId)) {
+                entriesByEmployee.set(entry.employeeId, []);
+            }
+            entriesByEmployee.get(entry.employeeId).push(entry);
+        }
+
+        // Map employees for quick lookup
+        const employeeMap = new Map(employees.map(e => [e.id, e]));
+
+        // Step 3: คำนวณสำหรับแต่ละพนักงาน
+        const results = [];
+        let grandTotalDiff = 0;
+
+        for (const [employeeId, entries] of entriesByEmployee) {
+            const employee = employeeMap.get(employeeId);
+            if (!employee || employee.wageRates.length === 0) continue;
+
+            const currentWage = employee.wageRates[0];
+            const currentDailyRate = Number(currentWage.dailyRate);
+            const employeeType = currentWage.position?.employeeType;
+
+            // TODO: รองรับ Driver (monthlyRate) - ต้องมี logic คำนวณแยก
+            if (employeeType === 'DRIVER') continue;
+
+            const retroEntries = [];
+
+            for (const entry of entries) {
+                // เช็คว่ามี retro entry สร้างไปแล้วหรือยัง
+                if (existingRetroMap.has(entry.id)) {
+                    retroEntries.push({
+                        originalEntryId: entry.id,
+                        date: toLocalDate(entry.startTime),
+                        workType: entry.workType,
+                        netMinutes: null,
+                        oldPaidTotal: null,
+                        newAmount: null,
+                        diffAmount: null,
+                        retroEntryId: existingRetroMap.get(entry.id),
+                        skipped: true,
+                    });
+                    continue;
+                }
+
+                // คำนวณ effective minutes ของ original entry
+                let originalMinutes = 0;
+                if (entry.endTime) {
+                    originalMinutes = Math.round(
+                        (entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60),
+                    );
+
+                    // หักเวลาพักเที่ยงสำหรับ REGULAR shift
+                    if (entry.workType === 'REGULAR' && entry.shiftType === 'REGULAR') {
+                        const lunchStart = 12 * 60;
+                        const lunchEnd = 13 * 60;
+                        const startMin = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
+                        const endMin = entry.endTime.getHours() * 60 + entry.endTime.getMinutes();
+                        const overlapStart = Math.max(startMin, lunchStart);
+                        const overlapEnd = Math.min(endMin, lunchEnd);
+                        if (overlapStart < overlapEnd) {
+                            originalMinutes -= (overlapEnd - overlapStart);
+                        }
+                    }
+                }
+
+                // รวม negative entries
+                const negatives = negativeByOriginal.get(entry.id) || [];
+                let totalNegativeMinutes = 0;
+                let totalNegativePaid = 0;
+
+                for (const neg of negatives) {
+                    totalNegativePaid += Number(neg.paidValue || 0);
+
+                    if (neg.endTime) {
+                        let negMinutes = Math.round(
+                            (neg.endTime.getTime() - neg.startTime.getTime()) / (1000 * 60),
+                        );
+
+                        if (neg.workType === 'REGULAR' && neg.shiftType === 'REGULAR') {
+                            const lunchStart = 12 * 60;
+                            const lunchEnd = 13 * 60;
+                            const startMin = neg.startTime.getHours() * 60 + neg.startTime.getMinutes();
+                            const endMin = neg.endTime.getHours() * 60 + neg.endTime.getMinutes();
+                            const overlapStart = Math.max(startMin, lunchStart);
+                            const overlapEnd = Math.min(endMin, lunchEnd);
+                            if (overlapStart < overlapEnd) {
+                                negMinutes -= (overlapEnd - overlapStart);
+                            }
+                        }
+
+                        totalNegativeMinutes += negMinutes;
+                    }
+                }
+
+                const netMinutes = originalMinutes - totalNegativeMinutes;
+                const netPaidValue = Number(entry.paidValue) + totalNegativePaid;
+
+                // คำนวณ newAmount ด้วย current rate
+                let newAmount = 0;
+                if (entry.workType === 'REGULAR') {
+                    newAmount = netMinutes * (currentDailyRate / 480);
+                } else if (entry.workType === 'OVERTIME') {
+                    const otMultiplier = Number(entry.otRate) || 1;
+                    newAmount = netMinutes * (currentDailyRate / 480) * otMultiplier;
+                }
+
+                const diffAmount = Math.round((newAmount - netPaidValue) * 100) / 100;
+
+                if (diffAmount > 0) {
+                    // สร้าง retro entry
+                    const retroEntry = await prisma.timeEntry.create({
+                        data: {
+                            timeSheetId: entry.timeSheetId,
+                            employeeId: entry.employeeId,
+                            startTime: entry.startTime,
+                            endTime: null,
+                            shiftType: entry.shiftType,
+                            workType: entry.workType,
+                            otRate: entry.workType === 'OVERTIME' ? entry.otRate : 0,
+                            isRetro: true,
+                            referenceEntryId: entry.id,
+                            paidValue: diffAmount,
+                            note: `จ่ายเพิ่มย้อนหลัง (อ้างอิง entry #${entry.id})`,
+                        },
+                    });
+
+                    retroEntries.push({
+                        originalEntryId: entry.id,
+                        date: toLocalDate(entry.startTime),
+                        workType: entry.workType,
+                        netMinutes,
+                        oldPaidTotal: netPaidValue,
+                        newAmount: Math.round(newAmount * 100) / 100,
+                        diffAmount,
+                        retroEntryId: retroEntry.id,
+                    });
+                }
+            }
+
+            const totalDiff = retroEntries
+                .filter(e => !e.skipped)
+                .reduce((sum, e) => sum + (e.diffAmount || 0), 0);
+
+            if (retroEntries.length > 0) {
+                grandTotalDiff += totalDiff;
+                results.push({
+                    employeeId,
+                    firstName: employee.firstName,
+                    lastName: employee.lastName,
+                    entries: retroEntries,
+                    totalDiff: Math.round(totalDiff * 100) / 100,
+                });
+            }
+        }
+
+        return {
+            data: results,
+            summary: {
+                totalEmployees: results.length,
+                totalDiff: Math.round(grandTotalDiff * 100) / 100,
+            },
+        };
     }
 }
 

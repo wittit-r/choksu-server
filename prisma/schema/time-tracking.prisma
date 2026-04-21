@@ -73,6 +73,7 @@ model TimeEntry {
 
     // สถานะ
     isNegative      Boolean         @default(false) @map("is_negative")  // รายการติดลบ
+    isRetro         Boolean         @default(false) @map("is_retro")     // รายการจ่ายเพิ่มย้อนหลัง
 
     // อ้างอิง (สำหรับ correction entry)
     referenceEntryId Int?           @map("reference_entry_id")  // ID ของ entry เดิมที่แก้ไข

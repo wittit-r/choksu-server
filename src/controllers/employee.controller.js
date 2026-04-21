@@ -220,6 +220,23 @@ class EmployeeController {
             data: wage,
         });
     }
+
+    calculateRetroactive = async (req, res) => {
+        const body = validate(
+            req.body,
+            Joi.object({
+                startDate: Joi.date().iso().required(),
+                endDate: Joi.date().iso().required().min(Joi.ref('startDate')),
+            }),
+        );
+
+        const result = await employeeService.calculateRetroactive(body);
+
+        res.status(200).json({
+            success: true,
+            ...result,
+        });
+    }
 }
 
 export default new EmployeeController();
