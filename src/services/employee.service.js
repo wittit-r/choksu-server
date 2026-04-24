@@ -563,9 +563,9 @@ class EmployeeService {
                 workType: {
                     in: ['REGULAR', 'OVERTIME', 'ACCOMMODATION'],
                 },
-                isNegative: false,
             },
             select: {
+                id: true,
                 startTime: true,
                 endTime: true,
                 workType: true,
@@ -574,6 +574,9 @@ class EmployeeService {
                 accommodation: true,
                 paidValue: true,
                 paidDate: true,
+                isNegative: true,
+                isRetro: true,
+                referenceEntryId: true,
             },
             orderBy: {
                 startTime: 'asc',
@@ -590,31 +593,44 @@ class EmployeeService {
             currentDate.setDate(currentDate.getDate() + 1);
         }
 
-        // Group entries by date
-        for (const entry of timeEntries) {
+        // Separate normal and related (negative/retro) entries
+        const normalEntries = timeEntries.filter(e => !e.isNegative && !e.isRetro);
+        const relatedEntries = timeEntries.filter(e => e.isNegative || e.isRetro);
+
+        // Map for lookup: normal entry id -> { dateKey, workType, timeRange }
+        const entryMap = new Map();
+
+        // Helper: build timeRange string from start/end times
+        const buildTimeRange = (startTime, endTime) => {
+            const start = toLocalTime(startTime);
+            const end = endTime ? toLocalTime(endTime) : '';
+            return `${start} - ${end}`;
+        };
+
+        // Helper: get bucket key from workType
+        const workTypeBucket = (workType) => {
+            if (workType === 'REGULAR') return 'regular';
+            if (workType === 'OVERTIME') return 'ot';
+            return 'accommodation';
+        };
+
+        // Group normal entries
+        for (const entry of normalEntries) {
             const dateKey = toLocalDate(entry.startTime);
+            const timeRange = buildTimeRange(entry.startTime, entry.endTime);
 
-            const timeRangeStart = toLocalTime(entry.startTime);
-
-            let timeRangeEnd = '';
             let totalMinutes = 0;
-
             if (entry.endTime) {
-                timeRangeEnd = toLocalTime(entry.endTime);
                 totalMinutes = Math.round(
                     (entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60),
                 );
             }
 
-            const timeRange = `${timeRangeStart} - ${timeRangeEnd}`;
-
             if (entry.workType === 'REGULAR') {
-                // หากเป็น REGULAR shift ต้องหักเวลาพักเที่ยง 12:00-13:00 (60 นาที)
-                // หากช่วงเวลาทำงานคร่อมช่วงพักเที่ยง
                 let effectiveMinutes = totalMinutes;
                 if (entry.shiftType === 'REGULAR' && entry.endTime) {
-                    const lunchStart = 12 * 60; // 12:00 = 720 นาที
-                    const lunchEnd = 13 * 60;   // 13:00 = 780 นาที
+                    const lunchStart = 12 * 60;
+                    const lunchEnd = 13 * 60;
                     const startMinutes = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
                     const endMinutes = entry.endTime.getHours() * 60 + entry.endTime.getMinutes();
                     const overlapStart = Math.max(startMinutes, lunchStart);
@@ -625,6 +641,7 @@ class EmployeeService {
                 }
                 const days = Math.floor((effectiveMinutes / 480) * 100) / 100;
                 groupedByDate[dateKey].regular.push({
+                    id: entry.id,
                     startTime: entry.startTime,
                     endTime: entry.endTime,
                     timeRange,
@@ -632,10 +649,14 @@ class EmployeeService {
                     totalMinutes: effectiveMinutes,
                     paidValue: entry.paidValue,
                     paidDate: entry.paidDate,
+                    isNegative: false,
+                    isRetro: false,
+                    referenceEntryId: null,
                 });
             } else if (entry.workType === 'OVERTIME') {
                 const rate = entry.otRate ? Number(entry.otRate) : 1;
                 groupedByDate[dateKey].ot.push({
+                    id: entry.id,
                     startTime: entry.startTime,
                     endTime: entry.endTime,
                     timeRange,
@@ -644,14 +665,106 @@ class EmployeeService {
                     rate,
                     paidValue: entry.paidValue,
                     paidDate: entry.paidDate,
+                    isNegative: false,
+                    isRetro: false,
+                    referenceEntryId: null,
                 });
             } else if (entry.workType === 'ACCOMMODATION') {
                 groupedByDate[dateKey].accommodation.push({
+                    id: entry.id,
                     accommodation: Number(entry.accommodation),
+                    paidValue: entry.paidValue,
+                    paidDate: entry.paidDate,
+                    isNegative: false,
+                    isRetro: false,
+                    referenceEntryId: null,
+                });
+            }
+
+            entryMap.set(entry.id, { dateKey, workType: entry.workType, timeRange });
+        }
+
+        // Attach negative/retro entries to their referenced normal entries
+        for (const entry of relatedEntries) {
+            const ref = entryMap.get(entry.referenceEntryId);
+            if (!ref) continue; // reference entry not in this date range, skip
+
+            const bucket = groupedByDate[ref.dateKey][workTypeBucket(ref.workType)];
+            if (!bucket) continue;
+
+            if (entry.isNegative) {
+                // Negative: use own time, calculate normally
+                const timeRange = buildTimeRange(entry.startTime, entry.endTime);
+                let totalMinutes = 0;
+                if (entry.endTime) {
+                    totalMinutes = Math.round(
+                        (entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60),
+                    );
+                }
+
+                if (entry.workType === 'REGULAR') {
+                    let effectiveMinutes = totalMinutes;
+                    if (entry.shiftType === 'REGULAR' && entry.endTime) {
+                        const lunchStart = 12 * 60;
+                        const lunchEnd = 13 * 60;
+                        const startMinutes = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
+                        const endMinutes = entry.endTime.getHours() * 60 + entry.endTime.getMinutes();
+                        const overlapStart = Math.max(startMinutes, lunchStart);
+                        const overlapEnd = Math.min(endMinutes, lunchEnd);
+                        if (overlapStart < overlapEnd) {
+                            effectiveMinutes -= (overlapEnd - overlapStart);
+                        }
+                    }
+                    const days = Math.floor((effectiveMinutes / 480) * 100) / 100;
+                    bucket.push({
+                        id: entry.id,
+                        isNegative: true,
+                        referenceEntryId: entry.referenceEntryId,
+                        timeRange,
+                        days,
+                        paidValue: entry.paidValue,
+                        paidDate: entry.paidDate,
+                    });
+                } else if (entry.workType === 'OVERTIME') {
+                    const rate = entry.otRate ? Number(entry.otRate) : 1;
+                    bucket.push({
+                        id: entry.id,
+                        isNegative: true,
+                        referenceEntryId: entry.referenceEntryId,
+                        timeRange,
+                        duration: formatMinutesToHours(totalMinutes),
+                        rate,
+                        paidValue: entry.paidValue,
+                        paidDate: entry.paidDate,
+                    });
+                } else if (entry.workType === 'ACCOMMODATION') {
+                    bucket.push({
+                        id: entry.id,
+                        isNegative: true,
+                        referenceEntryId: entry.referenceEntryId,
+                        accommodation: Number(entry.accommodation),
+                        paidValue: entry.paidValue,
+                        paidDate: entry.paidDate,
+                    });
+                }
+            } else if (entry.isRetro) {
+                // Retro: use referenced entry's timeRange, days/duration = null
+                bucket.push({
+                    id: entry.id,
+                    isRetro: true,
+                    referenceEntryId: entry.referenceEntryId,
+                    timeRange: ref.timeRange,
                     paidValue: entry.paidValue,
                     paidDate: entry.paidDate,
                 });
             }
+        }
+
+        // Sort entries by id within each bucket
+        for (const day of Object.values(groupedByDate)) {
+            day.regular.sort((a, b) => a.id - b.id);
+            day.ot.sort((a, b) => a.id - b.id);
+            day.accommodation.sort((a, b) => a.id - b.id);
         }
 
         // Sort days ascending by date
@@ -660,14 +773,17 @@ class EmployeeService {
         // Calculate summary
         let totalDays = 0;
         let totalOtMinutes = 0;
+        let totalAccommodation = 0;
         const totalOtByRate = {};
 
         for (const day of data) {
             for (const regular of day.regular) {
+                if (regular.isRetro) continue;
                 totalDays += regular.days;
             }
 
             for (const ot of day.ot) {
+                if (ot.isRetro) continue;
                 totalOtMinutes += ot.totalMinutes;
 
                 const rateKey = String(ot.rate);
@@ -676,11 +792,8 @@ class EmployeeService {
                 }
                 totalOtByRate[rateKey] += ot.totalMinutes;
             }
-        }
 
-        let totalAccommodation = 0;
-        for (const day of data) {
-            totalAccommodation += day.accommodation.length;
+            totalAccommodation += day.accommodation.filter(a => !a.isRetro).length;
         }
 
         const formattedOtByRate = {};
@@ -698,9 +811,9 @@ class EmployeeService {
         // Remove internal totalMinutes from response
         const cleanData = data.map((day) => ({
             date: day.date,
-            regular: day.regular.map(({ startTime, endTime, timeRange, days, paidValue, paidDate }) => ({ startTime, endTime, timeRange, days, paidValue, paidDate })),
-            ot: day.ot.map(({ startTime, endTime, timeRange, duration, rate, paidValue, paidDate }) => ({ startTime, endTime, timeRange, duration, rate, paidValue, paidDate })),
-            accommodation: day.accommodation.map(({ accommodation, paidValue, paidDate }) => ({ accommodation, paidValue, paidDate })),
+            regular: day.regular.map(({ totalMinutes, ...rest }) => rest),
+            ot: day.ot.map(({ totalMinutes, ...rest }) => rest),
+            accommodation: day.accommodation.map(item => item),
         }));
 
         return { data: cleanData, summary };
