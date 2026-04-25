@@ -10,6 +10,7 @@ const router = express.Router();
  */
 router.get("/", auth, wrap(employeeController.getEmployees));
 router.post("/", auth, wrap(employeeController.createEmployee));
+router.post("/retro-calculate", auth, wrap(employeeController.calculateRetroactive));
 router.get("/:id", auth, wrap(employeeController.getEmployeeById));
 router.patch("/:id", auth, wrap(employeeController.updateEmployee));
 

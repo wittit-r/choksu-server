@@ -778,6 +778,7 @@ class TimeSheetService {
                 workType: true,
                 otRate: true,
                 paidValue: true,
+                paidDate: true,
             },
         });
 
@@ -794,7 +795,7 @@ class TimeSheetService {
         }
 
         // 3. Check paid status
-        if (originalEntry.paidValue === null) {
+        if (originalEntry.paidDate === null) {
             throw err.validation({
                 message: 'รายการนี้ยังไม่ได้จ่ายเงิน กรุณาแก้ไขรายการเวลาโดยตรงแทนการทำ correction',
             });
@@ -1233,7 +1234,7 @@ class TimeSheetService {
         // 1. ตรวจสอบ entry มีอยู่และเป็นของ timesheet นี้
         const entry = await prisma.timeEntry.findUnique({
             where: { id: entryId },
-            select: { id: true, timeSheetId: true, isNegative: true, paidValue: true },
+            select: { id: true, timeSheetId: true, isNegative: true, paidDate: true },
         });
 
         if (!entry || entry.timeSheetId !== timeSheetId) {
@@ -1241,7 +1242,7 @@ class TimeSheetService {
         }
 
         // 2. ตรวจสอบ paidDate (ทุกกรณีต้องยังไม่จ่ายเงิน)
-        if (entry.paidValue !== null) {
+        if (entry.paidDate !== null) {
             throw err.validation({
                 message: 'รายการเวลาจ่ายเงินแล้ว ไม่สามารถลบได้',
             });

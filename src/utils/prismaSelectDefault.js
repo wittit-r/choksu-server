@@ -63,6 +63,7 @@ export default {
         accommodation: true,
         note: true,
         isNegative: true,
+        isRetro: true,
         paidValue: true,
         paidDate: true,
         referenceEntryId: true,
