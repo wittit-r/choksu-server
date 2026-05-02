@@ -77,7 +77,7 @@ import err from "../utils/error.js";
 
 // Throw not found error
 if (!employee) {
-    throw err.notFound("ไม่พบพนักงาน");
+    throw err.notFound({ id });
 }
 ```
 
@@ -129,26 +129,27 @@ if (!employee) {
 
 ### RESTful Conventions
 
-- `GET /api/employees` - ดึงรายการ (รองรับ pagination, search)
-- `GET /api/employees/:id` - ดึงข้อมูลรายการเดียว
-- `POST /api/employees` - สร้างใหม่
-- `PATCH /api/employees/:id` - อัปเดตบาง fields
-- `DELETE /api/employees/:id` - ลบ
+- `GET /employees` - ดึงรายการ (รองรับ pagination, search)
+- `GET /employees/:id` - ดึงข้อมูลรายการเดียว
+- `POST /employees` - สร้างใหม่
+- `PATCH /employees/:id` - อัปเดตบาง fields
+- `DELETE /employees/:id` - ลบ
 
 ### Query Parameters
 
 **Pagination & Filtering:**
 ```
-GET /api/employees?page=1&limit=10&search=john
+GET /employees?page=1&limit=10&search=john
 ```
 
 ## Security Best Practices
 
 1. **Input Validation**: ตรวจสอบทุก request ด้วย Joi schemas
 2. **SQL Injection**: Prisma ป้องกันอัตโนมัติ
-3. **Authentication**: ใช้ JWT tokens
+3. **Authentication**: ใช้ access token และ refresh token
 4. **CORS**: กำหนด allowed origins ใน production
 5. **Environment Variables**: ใช้ `.env` สำหรับ sensitive data
+6. **Private Methods**: ขึ้นต้นด้วย underscore (_) และไว้บนสุดของ class หลังจาก contrucror
 
 ## Common Tasks
 
@@ -175,7 +176,7 @@ GET /api/employees?page=1&limit=10&search=john
 
        async getXxxById(id) {
            const xxx = await prisma.xxx.findUnique({ where: { id } });
-           if (!xxx) throw err.notFound("ไม่พบข้อมูล");
+           if (!xxx) throw err.notFound({ id });
            return xxx;
        }
    }
@@ -192,7 +193,7 @@ GET /api/employees?page=1&limit=10&search=john
        getXxxs = async (req, res) => {
            const query = validate(req.query, Joi.object({ ... }));
            const result = await xxxService.getXxxs(query);
-           res.status(200).json({ status: "success", ...result });
+           res.status(200).json({ success: true, ...result });
        };
    }
 

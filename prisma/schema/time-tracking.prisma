@@ -1,8 +1,7 @@
 // สถานะใบเซ็นชื่อ
 enum TimeSheetStatus {
     PENDING   // รอกรอก
-    FILLED    // กรอกแล้ว
-    LOCKED    // ล็อคแล้ว
+    FILLED    // กรอกแล้ว (accountant ยืนยัน, ห้ามแก้ไข)
 }
 
 // ประเภทใบเซ็นชื่อ
@@ -16,6 +15,12 @@ enum WorkType {
     REGULAR       // เวลาปกติ
     OVERTIME      // ทำงานล่วงเวลา
     ACCOMMODATION // ค่าที่พัก
+}
+
+// สถานะรายการเวลา
+enum TimeEntryStatus {
+    DRAFT      // ยังไม่ได้ดึงไปสร้าง payroll relate
+    LOCKED     // ถูกดึงไปสร้าง payroll relate แล้ว (ป้องกันดึงซ้ำ)
 }
 
 // ใบเซ็นชื่อ (Unified: Worker รายวัน, Driver รายเดือน)
@@ -74,6 +79,7 @@ model TimeEntry {
     // สถานะ
     isNegative      Boolean         @default(false) @map("is_negative")  // รายการติดลบ
     isRetro         Boolean         @default(false) @map("is_retro")     // รายการจ่ายเพิ่มย้อนหลัง
+    status          TimeEntryStatus  @default(DRAFT) @map("status")    // สถานะสำหรับการดึงไปสร้าง payroll relate
 
     // อ้างอิง (สำหรับ correction entry)
     referenceEntryId Int?           @map("reference_entry_id")  // ID ของ entry เดิมที่แก้ไข

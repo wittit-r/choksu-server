@@ -1,8 +1,7 @@
 // สถานะรอบจ่าย
 enum PayPeriodStatus {
     OPEN      // เปิดรับข้อมูล
-    CLOSED    // ปิดรับข้อมูล
-    PAID      // จ่ายแล้ว
+    CLOSED    // ปิดรับข้อมูล (ล็อคโดยบัญชี)
 }
 
 // สถานะการจ่ายเงิน
@@ -21,7 +20,6 @@ model PayPeriod {
     employeeType            EmployeeType        @map("employee_type")
     startDate               DateTime            @map("start_date")
     endDate                 DateTime            @map("end_date")
-    paidDate                DateTime?           @map("paid_date")      // วันจ่ายจริง
     status                  PayPeriodStatus     @default(OPEN) @map("status")
 
     createdAt               DateTime            @default(now()) @map("created_at")

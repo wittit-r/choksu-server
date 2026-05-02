@@ -6,6 +6,8 @@ import positionRoutes from "./position.routes.js";
 import workLeaderRoutes from "./work-leader.routes.js";
 import branchRoutes from "./branch.routes.js";
 import timesheetRoutes from "./timesheet.routes.js";
+import payPeriodRoutes from "./pay-period.routes.js";
+import payrollRoutes from "./payroll.routes.js";
 
 const router = express.Router();
 
@@ -29,5 +31,11 @@ router.use('/branches', branchRoutes);
 
 // TimeSheet routes
 router.use('/timesheets', timesheetRoutes);
+
+// Pay Period routes
+router.use('/pay-periods', payPeriodRoutes);
+
+// Payroll routes
+router.use('/payrolls', payrollRoutes);
 
 export default router;
