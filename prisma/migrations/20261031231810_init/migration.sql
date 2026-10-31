@@ -1,3 +1,6 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
 -- CreateEnum
 CREATE TYPE "ContractType" AS ENUM ('WORKER', 'DRIVER');
 
@@ -5,7 +8,7 @@ CREATE TYPE "ContractType" AS ENUM ('WORKER', 'DRIVER');
 CREATE TYPE "InvoiceStatus" AS ENUM ('DRAFT', 'RECEIVED', 'CANCELLED');
 
 -- CreateEnum
-CREATE TYPE "PayPeriodStatus" AS ENUM ('OPEN', 'CLOSED', 'PAID');
+CREATE TYPE "PayPeriodStatus" AS ENUM ('OPEN', 'CLOSED');
 
 -- CreateEnum
 CREATE TYPE "PayrollStatus" AS ENUM ('PENDING', 'CALCULATED', 'PAID', 'CANCELLED');
@@ -17,13 +20,16 @@ CREATE TYPE "EmployeeType" AS ENUM ('WORKER', 'DRIVER');
 CREATE TYPE "ShiftType" AS ENUM ('REGULAR', 'SHIFT');
 
 -- CreateEnum
-CREATE TYPE "TimeSheetStatus" AS ENUM ('PENDING', 'FILLED', 'LOCKED');
+CREATE TYPE "TimeSheetStatus" AS ENUM ('PENDING', 'FILLED');
 
 -- CreateEnum
 CREATE TYPE "TimeSheetType" AS ENUM ('DAILY', 'MONTHLY');
 
 -- CreateEnum
 CREATE TYPE "WorkType" AS ENUM ('REGULAR', 'OVERTIME', 'ACCOMMODATION');
+
+-- CreateEnum
+CREATE TYPE "TimeEntryStatus" AS ENUM ('DRAFT', 'LOCKED');
 
 -- CreateEnum
 CREATE TYPE "UserRole" AS ENUM ('SUPER_ADMIN', 'SENOIR_ACCOUNTING', 'ACCOUNTING', 'COORDINATOR');
@@ -136,7 +142,6 @@ CREATE TABLE "pay_periods" (
     "employee_type" "EmployeeType" NOT NULL,
     "start_date" TIMESTAMP(3) NOT NULL,
     "end_date" TIMESTAMP(3) NOT NULL,
-    "paid_date" TIMESTAMP(3),
     "status" "PayPeriodStatus" NOT NULL DEFAULT 'OPEN',
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3),
@@ -150,9 +155,6 @@ CREATE TABLE "payrolls" (
     "pay_ref" TEXT NOT NULL,
     "employee_id" INTEGER NOT NULL,
     "pay_period_id" INTEGER NOT NULL,
-    "summary_regular_amount" DECIMAL(12,2) NOT NULL,
-    "summary_ot_amount" DECIMAL(12,2) NOT NULL,
-    "summary_accommodation_amount" DECIMAL(12,2) NOT NULL,
     "sso_amount" DECIMAL(12,2) NOT NULL DEFAULT 0,
     "slf_amount" DECIMAL(12,2) NOT NULL DEFAULT 0,
     "other_deduction" DECIMAL(12,2) NOT NULL DEFAULT 0,
@@ -243,13 +245,16 @@ CREATE TABLE "time_entries" (
     "time_sheet_id" INTEGER NOT NULL,
     "employee_id" INTEGER NOT NULL,
     "start_time" TIMESTAMP(3) NOT NULL,
-    "end_time" TIMESTAMP(3) NOT NULL,
+    "end_time" TIMESTAMP(3),
     "shift_type" "ShiftType" NOT NULL,
     "work_type" "WorkType" NOT NULL,
-    "ot_rate" INTEGER NOT NULL DEFAULT 0,
+    "ot_rate" DECIMAL(3,1) NOT NULL DEFAULT 0,
     "accommodation" DECIMAL(12,2) NOT NULL DEFAULT 0,
     "is_negative" BOOLEAN NOT NULL DEFAULT false,
-    "lock_flag" BOOLEAN NOT NULL DEFAULT false,
+    "is_retro" BOOLEAN NOT NULL DEFAULT false,
+    "status" "TimeEntryStatus" NOT NULL DEFAULT 'DRAFT',
+    "reference_entry_id" INTEGER,
+    "create_by" INTEGER,
     "paid_value" DECIMAL(12,2),
     "paid_date" TIMESTAMP(3),
     "bill_date" TIMESTAMP(3),
@@ -481,7 +486,7 @@ CREATE INDEX "time_entries_shift_type_idx" ON "time_entries"("shift_type");
 CREATE INDEX "time_entries_work_type_idx" ON "time_entries"("work_type");
 
 -- CreateIndex
-CREATE INDEX "time_entries_lock_flag_idx" ON "time_entries"("lock_flag");
+CREATE INDEX "time_entries_reference_entry_id_idx" ON "time_entries"("reference_entry_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "users_username_key" ON "users"("username");
@@ -596,3 +601,4 @@ ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_fkey" FOREIGN KEY ("user
 
 -- AddForeignKey
 ALTER TABLE "work_leaders" ADD CONSTRAINT "work_leaders_branch_id_fkey" FOREIGN KEY ("branch_id") REFERENCES "branches"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
