@@ -96,8 +96,9 @@ class PayPeriodService {
         const wageRateMap = await this._getPrimaryWageRates(employeeIds, payPeriod.startDate);
 
         const payrolls = payPeriod.payrolls.map(payroll => {
-            const dailyRate = wageRateMap.get(payroll.employeeId) ?? 0;
-            const summary = this._buildPayrollSummary(payroll, dailyRate);
+            const wageRate = wageRateMap.get(payroll.employeeId)
+                ?? { dailyRate: 0, position: { code: null, name: null } };
+            const summary = this._buildPayrollSummary(payroll, wageRate);
             const { payrollRelates, employee, ...payrollData } = payroll;
             const { workLeader, ...employeeData } = employee;
             return {
@@ -105,8 +106,8 @@ class PayPeriodService {
                 summary,
                 employee: {
                     ...employeeData,
-                    positionCode: dailyRate.position.code,
-                    positionName: dailyRate.position.name,
+                    positionCode: wageRate.position.code,
+                    positionName: wageRate.position.name,
                     branchName: workLeader?.branch?.name,
                 },
             };
