@@ -187,6 +187,7 @@ class PayrollService {
             const timeEntries = await tx.timeEntry.findMany({
                 where: {
                     employeeId: payroll.employeeId,
+                    timeSheet: { status: 'FILLED' },
                     startTime: { gte: startDate, lte: endDate },
                 },
                 orderBy: { startTime: 'asc' },
@@ -211,11 +212,11 @@ class PayrollService {
                 });
             }
 
-            // คำนวณ summary + paidValue ใหม่
+            // คำนวณ paidValue ใหม่
             const wageRatesByDate = await payPeriodService._getWageRatesByDate(
                 payroll.employeeId, startDate, endDate, tx,
             );
-            const { entryAmounts, ...payrollData } = payPeriodService._calculatePayrollAmounts(
+            const entryAmounts = payPeriodService._calculatePayrollAmounts(
                 timeEntries, wageRatesByDate,
             );
 
@@ -231,14 +232,8 @@ class PayrollService {
                 `;
             }
 
-            // อัปเดต payroll summary
-            const updated = await tx.payroll.update({
-                where: { id },
-                data: payrollData,
-            });
-
             return {
-                ...updated,
+                id,
                 entryCount: timeEntries.length,
                 newEntries: newEntries.length,
             };

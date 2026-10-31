@@ -543,7 +543,7 @@ class TimeSheetService {
                             employeeId: entry.employeeId,
                             startTime: entry.startTime,
                             endTime: entry.endTime,
-                            shiftType: entry.shiftType === 'regular' ? 'REGULAR' : 'SHIFT',
+                            shiftType: entry.shiftType,
                             workType,
                             otRate,
                             accommodation: 0,

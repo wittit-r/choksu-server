@@ -389,7 +389,7 @@ class TimeSheetController {
                             employeeId: Joi.number().integer().required(),
                             timeIn: Joi.time().required(),
                             timeOut: Joi.time().required(),
-                            shiftType: Joi.string().valid('regular', 'shift').default('regular'),
+                            shiftType: Joi.string().valid('REGULAR', 'SHIFT').default('REGULAR'),
                         })
                     )
                     .min(1)

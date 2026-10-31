@@ -57,11 +57,33 @@ class PayPeriodService {
                                 id: true,
                                 firstName: true,
                                 lastName: true,
+                                idCard: true,
                                 bankAccount: true,
+                                workLeader: {
+                                    select: {
+                                        branch: {
+                                            select: { name: true },
+                                        },
+                                    },
+                                },
                             },
                         },
-                        _count: {
-                            select: { payrollRelates: true },
+                        payrollRelates: {
+                            include: {
+                                timeEntry: {
+                                    select: {
+                                        id: true,
+                                        startTime: true,
+                                        endTime: true,
+                                        workType: true,
+                                        shiftType: true,
+                                        otRate: true,
+                                        isNegative: true,
+                                        isRetro: true,
+                                        paidValue: true,
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -70,7 +92,27 @@ class PayPeriodService {
 
         if (!payPeriod) throw err.notFound({ id }, 'ไม่พบรอบจ่ายเงิน');
 
-        return payPeriod;
+        const employeeIds = payPeriod.payrolls.map(p => p.employeeId);
+        const wageRateMap = await this._getPrimaryWageRates(employeeIds, payPeriod.startDate);
+
+        const payrolls = payPeriod.payrolls.map(payroll => {
+            const dailyRate = wageRateMap.get(payroll.employeeId) ?? 0;
+            const summary = this._buildPayrollSummary(payroll, dailyRate);
+            const { payrollRelates, employee, ...payrollData } = payroll;
+            const { workLeader, ...employeeData } = employee;
+            return {
+                ...payrollData,
+                summary,
+                employee: {
+                    ...employeeData,
+                    positionCode: dailyRate.position.code,
+                    positionName: dailyRate.position.name,
+                    branchName: workLeader?.branch?.name,
+                },
+            };
+        });
+
+        return { ...payPeriod, payrolls };
     }
 
     async createPayPeriod({ periodNo, year, employeeType, startDate, endDate }) {
@@ -217,8 +259,8 @@ class PayPeriodService {
                     employeeId, startDate, endDate, tx,
                 );
 
-                // คำนวณ summary
-                const { entryAmounts, ...payrollData } = this._calculatePayrollAmounts(timeEntries, wageRatesByDate);
+                // คำนวณ paidValue
+                const entryAmounts = this._calculatePayrollAmounts(timeEntries, wageRatesByDate);
 
                 // บันทึก paidValue ลง time entry (bulk update)
                 if (entryAmounts.length > 0) {
@@ -247,7 +289,6 @@ class PayPeriodService {
                         payRef,
                         employeeId,
                         payPeriodId,
-                        ...payrollData,
                     },
                 });
 
@@ -357,6 +398,7 @@ class PayPeriodService {
                 const timeEntries = await tx.timeEntry.findMany({
                     where: {
                         employeeId: payroll.employeeId,
+                        timeSheet: { status: 'FILLED' },
                         startTime: { gte: startDate, lte: endDate },
                     },
                     orderBy: { startTime: 'asc' },
@@ -381,11 +423,11 @@ class PayPeriodService {
                     });
                 }
 
-                // คำนวณ summary ใหม่จากทุก entry (รวมเก่า + ใหม่)
+                // คำนวณ paidValue ใหม่จากทุก entry (รวมเก่า + ใหม่)
                 const wageRatesByDate = await this._getWageRatesByDate(
                     payroll.employeeId, startDate, endDate, tx,
                 );
-                const { entryAmounts, ...payrollData } = this._calculatePayrollAmounts(timeEntries, wageRatesByDate);
+                const entryAmounts = this._calculatePayrollAmounts(timeEntries, wageRatesByDate);
 
                 // อัปเดต paidValue ลง time entry (bulk update)
                 if (entryAmounts.length > 0) {
@@ -399,13 +441,8 @@ class PayPeriodService {
                     `;
                 }
 
-                const updatedPayroll = await tx.payroll.update({
-                    where: { id: payroll.id },
-                    data: payrollData,
-                });
-
                 updated.push({
-                    ...updatedPayroll,
+                    id: payroll.id,
                     entryCount: timeEntries.length,
                     newEntries: newEntries.length,
                 });
@@ -499,45 +536,30 @@ class PayPeriodService {
     // ─── Private Helpers ───────────────────────────────────────
 
     _calculatePayrollAmounts(timeEntries, wageRatesByDate) {
-        let summaryRegularAmount = 0;
-        let summaryOtAmount = 0;
-        let summaryAccommodationAmount = 0;
         const entryAmounts = [];
 
         for (const entry of timeEntries) {
             if (entry.isNegative) {
                 const amount = this._calculateEntryAmount(entry, wageRatesByDate);
-                if (entry.workType === 'REGULAR') summaryRegularAmount -= amount;
-                else if (entry.workType === 'OVERTIME') summaryOtAmount -= amount;
                 entryAmounts.push({ id: entry.id, paidValue: -amount });
             } else if (entry.isRetro) {
-                const retroValue = Number(entry.paidValue || 0);
-                if (entry.workType === 'REGULAR') summaryRegularAmount += retroValue;
-                else if (entry.workType === 'OVERTIME') summaryOtAmount += retroValue;
+                // retro entries มี paidValue อยู่แล้ว — skip
             } else {
                 if (entry.workType === 'ACCOMMODATION') {
-                    const accValue = Number(entry.accommodation || 0);
-                    summaryAccommodationAmount += accValue;
-                    entryAmounts.push({ id: entry.id, paidValue: accValue });
+                    entryAmounts.push({ id: entry.id, paidValue: Number(entry.accommodation || 0) });
                 } else {
                     const amount = this._calculateEntryAmount(entry, wageRatesByDate);
-                    if (entry.workType === 'REGULAR') summaryRegularAmount += amount;
-                    else if (entry.workType === 'OVERTIME') summaryOtAmount += amount;
                     entryAmounts.push({ id: entry.id, paidValue: amount });
                 }
             }
         }
 
-        return {
-            summaryRegularAmount: Math.round(summaryRegularAmount * 100) / 100,
-            summaryOtAmount: Math.round(summaryOtAmount * 100) / 100,
-            summaryAccommodationAmount: Math.round(summaryAccommodationAmount * 100) / 100,
-            entryAmounts,
-        };
+        return entryAmounts;
     }
 
     _calculateEntryAmount(entry, wageRatesByDate) {
-        const wageRate = wageRatesByDate.get(toLocalDate(entry.startTime));
+        const dateKey = toLocalDate(entry.startTime);
+        const wageRate = wageRatesByDate.get(dateKey);
         if (!wageRate) return 0;
 
         const dailyRate = Number(wageRate.dailyRate);
@@ -573,7 +595,8 @@ class PayPeriodService {
 
             const fullHours = Math.floor(effectiveMinutes / 60);
             const remainMinutes = effectiveMinutes % 60;
-            return fullHours * hourlyRate + remainMinutes * minuteRate;
+            const result = fullHours * hourlyRate + remainMinutes * minuteRate;
+            return result;
         }
 
         if (entry.workType === 'OVERTIME') {
@@ -601,6 +624,9 @@ class PayPeriodService {
             },
             select: {
                 dailyRate: true,
+                hourlyRate: true,
+                minuteRate: true,
+                monthlyRate: true,
                 effectiveFrom: true,
                 effectiveTo: true,
             },
@@ -622,6 +648,120 @@ class PayPeriodService {
             current.setDate(current.getDate() + 1);
         }
 
+        return rateMap;
+    }
+
+    _buildPayrollSummary(payroll, dailyRate) {
+        const entries = payroll.payrollRelates.map(r => r.timeEntry);
+
+        let regularAmount = 0;
+        let otAmount = 0;
+        let accommodationAmount = 0;
+        let regularEffectiveMinutes = 0;
+        const otMinutes = { '1': 0, '1.5': 0, '2': 0, '3': 0 };
+        let deductionAmount = 0;
+        let retroAmount = 0;
+
+        for (const entry of entries) {
+            const paidValue = entry.paidValue != null ? Number(entry.paidValue) : 0;
+
+            if (entry.isNegative) {
+                deductionAmount += Math.abs(paidValue);
+            } else if (entry.isRetro) {
+                retroAmount += paidValue;
+            } else {
+                if (entry.workType === 'REGULAR') {
+                    regularAmount += paidValue;
+                    if (entry.endTime) {
+                        let effective = Math.round(
+                            (entry.endTime.getTime() - entry.startTime.getTime()) / 60000,
+                        );
+                        if (entry.shiftType === 'REGULAR') {
+                            const startMin = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
+                            const endMin = entry.endTime.getHours() * 60 + entry.endTime.getMinutes();
+                            const overlapStart = Math.max(startMin, 720);
+                            const overlapEnd = Math.min(endMin, 780);
+                            if (overlapStart < overlapEnd) {
+                                effective -= (overlapEnd - overlapStart);
+                            }
+                        }
+                        regularEffectiveMinutes += Math.max(0, effective);
+                    }
+                } else if (entry.workType === 'OVERTIME') {
+                    otAmount += paidValue;
+                    const rateKey = String(Number(entry.otRate) || 1);
+                    if (entry.endTime) {
+                        const minutes = Math.round(
+                            (entry.endTime.getTime() - entry.startTime.getTime()) / 60000,
+                        );
+                        if (otMinutes.hasOwnProperty(rateKey)) {
+                            otMinutes[rateKey] += minutes;
+                        } else {
+                            otMinutes[rateKey] = minutes;
+                        }
+                    }
+                } else if (entry.workType === 'ACCOMMODATION') {
+                    accommodationAmount += paidValue;
+                }
+            }
+        }
+
+        const sso = Number(payroll.ssoAmount) || 0;
+        const slf = Number(payroll.slfAmount) || 0;
+        const other = Number(payroll.otherDeduction) || 0;
+
+        const netPay = Math.round(
+            (regularAmount + otAmount + accommodationAmount + retroAmount - deductionAmount - sso - slf - other) * 100,
+        ) / 100;
+
+        const workingDays = Math.round((regularEffectiveMinutes / 480) * 1000) / 1000;
+
+        return {
+            dailyRate: dailyRate.dailyRate || 0,
+            regularAmount: Math.round(regularAmount * 100) / 100,
+            otAmount: Math.round(otAmount * 100) / 100,
+            accommodationAmount: Math.round(accommodationAmount * 100) / 100,
+            deductionAmount: Math.round(deductionAmount * 100) / 100,
+            retroAmount: Math.round(retroAmount * 100) / 100,
+            workingDays,
+            overtimeMinutes: otMinutes,
+            netPay,
+        };
+    }
+
+    async _getPrimaryWageRates(employeeIds, periodStartDate) {
+        if (employeeIds.length === 0) return new Map();
+
+        const wageRates = await prisma.wageRate.findMany({
+            where: {
+                employeeId: { in: employeeIds },
+                effectiveFrom: { lte: periodStartDate },
+                OR: [
+                    { effectiveTo: null },
+                    { effectiveTo: { gte: periodStartDate } },
+                ],
+            },
+            select: {
+                employeeId: true,
+                dailyRate: true,
+                monthlyRate: true,
+                position: { select: { name: true, code: true } },
+            },
+            orderBy: [
+                { employeeId: 'asc' },
+                { effectiveFrom: 'desc' },
+            ],
+        });
+
+        const rateMap = new Map();
+        for (const rate of wageRates) {
+            if (!rateMap.has(rate.employeeId)) {
+                rateMap.set(rate.employeeId, {
+                    dailyRate: Number(rate.dailyRate),
+                    position: rate.position,
+                });
+            }
+        }
         return rateMap;
     }
 

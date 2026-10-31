@@ -7,6 +7,9 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:flows": "vitest run test/flows/",
     "format": "prettier --write \"src/**/*.{js,json}\""
   },
   "dependencies": {
@@ -26,6 +29,9 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.11",
-    "prettier": "^3.5.3"
+    "pg": "^8.20.0",
+    "prettier": "^3.5.3",
+    "supertest": "^7.2.2",
+    "vitest": "^4.1.5"
   }
 }

@@ -42,11 +42,6 @@ model Payroll {
     employeeId                  Int                 @map("employee_id")
     payPeriodId                 Int                 @map("pay_period_id")
 
-    // สรุปยอด
-    summaryRegularAmount        Decimal             @map("summary_regular_amount") @db.Decimal(12, 2)
-    summaryOtAmount             Decimal             @map("summary_ot_amount") @db.Decimal(12, 2)
-    summaryAccommodationAmount  Decimal             @map("summary_accommodation_amount") @db.Decimal(12, 2)
-
     // การหัก
     ssoAmount                   Decimal             @default(0) @map("sso_amount") @db.Decimal(12, 2)
     slfAmount                   Decimal             @default(0) @map("slf_amount") @db.Decimal(12, 2)
