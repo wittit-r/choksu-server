@@ -1,36 +1,7 @@
-import prisma from "../databases/prisma.js";
-import prismaSelectDefault from "../utils/prismaSelectDefault.js";
+import { Op } from "sequelize";
+
+import { Branch, WorkLeader } from "../database/index.js";
 import err from "../utils/error.js";
-
-/**
- * @typedef {Object} PaginationResult
- * @property {Array} data - ข้อมูลที่ดึงมา
- * @property {Object} pagination - ข้อมูล pagination
- * @property {number} pagination.page - หน้าปัจจุบัน
- * @property {number} pagination.limit - จำนวนรายการต่อหน้า
- * @property {number} pagination.total - จำนวนรายการทั้งหมด
- * @property {number} pagination.totalPages - จำนวนหน้าทั้งหมด
- */
-
-/**
- * @typedef {Object} WorkLeader
- * @property {string} id - WorkLeader ID (UUID)
- * @property {string} name - ชื่อหัวหน้างาน
- * @property {string} refNo - รหัสอ้างอิง
- * @property {string} branchId - ID ของสาขา
- * @property {Object} branch - ข้อมูลสาขา
- * @property {boolean} isActive - สถานะการใช้งาน
- * @property {Date} createdAt - วันที่สร้าง
- * @property {Date} updatedAt - วันที่อัปเดต
- */
-
-/**
- * @typedef {Object} WorkLeaderData
- * @property {string} name - ชื่อหัวหน้างาน
- * @property {string} refNo - รหัสอ้างอิง
- * @property {string} branchId - ID ของสาขา
- * @property {boolean} [isActive=true] - สถานะการใช้งาน
- */
 
 /**
  * Service สำหรับจัดการข้อมูลหัวหน้างาน
@@ -39,21 +10,16 @@ class WorkLeaderService {
     /**
      * ตรวจสอบว่าสาขามีอยู่จริง
      * @private
-     * @param {string} branchId - Branch ID (UUID)
-     * @returns {Promise<Object>} ข้อมูลสาขา
+     * @param {number} branchId - Branch ID
      * @throws {AppError} ไม่พบสาขา (validation)
      */
     async _validateBranchExists(branchId) {
-        const branch = await prisma.branch.findUnique({
-            where: { id: branchId },
-            select: { id: true },
+        const branch = await Branch.findByPk(branchId, {
+            attributes: ["id"],
         });
-
         if (!branch) {
-            throw err.validation({ branchId: 'ไม่พบสาขาที่ระบุ' });
+            throw err.validation({ branchId }, "ไม่พบสาขา");
         }
-
-        return branch;
     }
 
     /**
@@ -65,16 +31,16 @@ class WorkLeaderService {
      * @param {string} params.sortBy - ฟิลด์ที่ใช้เรียงลำดับ
      * @param {string} [params.search] - คำค้นหา (ค้นหาใน name, refNo)
      * @param {boolean} [params.isActive] - กรองตามสถานะการใช้งาน
-     * @param {string} [params.branchId] - กรองตามสาขา
+     * @param {number} [params.branchId] - กรองตามสาขา
      * @returns {Promise<PaginationResult>} รายการหัวหน้างานพร้อม pagination
      */
     async getWorkLeaders({ page, limit, sort, sortBy, ...query }) {
         const where = {};
 
         if (query.search) {
-            where.OR = [
-                { name: { contains: query.search, mode: 'insensitive' } },
-                { refNo: { contains: query.search, mode: 'insensitive' } },
+            where[Op.or] = [
+                { name: { [Op.like]: `%${query.search}%` } },
+                { refNo: { [Op.like]: `%${query.search}%` } },
             ];
         }
 
@@ -86,25 +52,13 @@ class WorkLeaderService {
             where.branchId = query.branchId;
         }
 
-        const [workLeaders, total] = await Promise.all([
-            prisma.workLeader.findMany({
-                where,
-                select: {
-                    ...prismaSelectDefault.workLeader,
-                    branch: {
-                        select: prismaSelectDefault.branch,
-                    }
-                },
-                skip: (page - 1) * limit,
-                take: limit,
-                orderBy: {
-                    [sortBy]: sort,
-                },
-            }),
-            prisma.workLeader.count({
-                where,
-            }),
-        ]);
+        const { rows: workLeaders, count: total } = await WorkLeader.findAndCountAll({
+            where,
+            include: { association: "branch" },
+            offset: (page - 1) * limit,
+            limit,
+            order: [[sortBy, sort]],
+        });
 
         return {
             data: workLeaders,
@@ -125,14 +79,8 @@ class WorkLeaderService {
      * @throws {AppError} ไม่พบหัวหน้างาน (notFound)
      */
     async getWorkLeaderById({ id }) {
-        const workLeader = await prisma.workLeader.findUnique({
-            where: { id },
-            select: {
-                ...prismaSelectDefault.workLeader,
-                branch: {
-                    select: prismaSelectDefault.branch,
-                }
-            },
+        const workLeader = await WorkLeader.findByPk(id, {
+            include: { association: "branch" },
         });
 
         if (!workLeader) {
@@ -151,35 +99,23 @@ class WorkLeaderService {
     async createWorkLeader(data) {
         await this._validateBranchExists(data.branchId);
 
-        const workLeader = await prisma.workLeader.create({
-            data: {
-                name: data.name,
-                refNo: data.refNo,
-                branchId: data.branchId,
-                isActive: data.isActive ?? true,
-            },
-            select: {
-                ...prismaSelectDefault.workLeader,
-                branch: {
-                    select: prismaSelectDefault.branch,
-                }
-            },
-        });
-
-        return workLeader;
+        return WorkLeader.create({
+            name: data.name,
+            refNo: data.refNo,
+            branchId: data.branchId,
+            isActive: data.isActive ?? true,
+        }, { include: { association: "branch" } });
     }
 
     /**
      * อัปเดตข้อมูลหัวหน้างาน
-     * @param {string} id - WorkLeader ID (UUID)
+     * @param {number} id - WorkLeader ID
      * @param {WorkLeaderData} data - ข้อมูลที่จะอัปเดต
      * @returns {Promise<WorkLeader>} ข้อมูลหัวหน้างานที่อัปเดตแล้ว
      * @throws {AppError} ไม่พบหัวหน้างาน (notFound) หรือ ไม่พบสาขา (validation)
      */
     async updateWorkLeader(id, data) {
-        const workLeader = await prisma.workLeader.findUnique({
-            where: { id },
-        });
+        const workLeader = await WorkLeader.findByPk(id);
 
         if (!workLeader) {
             throw err.notFound({ id });
@@ -189,23 +125,15 @@ class WorkLeaderService {
             await this._validateBranchExists(data.branchId);
         }
 
-        const updated = await prisma.workLeader.update({
-            where: { id },
-            data: {
-                name: data.name,
-                refNo: data.refNo,
-                branchId: data.branchId,
-                isActive: data.isActive,
-            },
-            select: {
-                ...prismaSelectDefault.workLeader,
-                branch: {
-                    select: prismaSelectDefault.branch,
-                }
-            },
-        });
+        workLeader.name = data.name;
+        workLeader.refNo = data.refNo;
+        workLeader.branchId = data.branchId;
+        workLeader.isActive = data.isActive;
+        await workLeader.save();
 
-        return updated;
+        return WorkLeader.findByPk(id, {
+            include: { association: "branch" },
+        });
     }
 }
 

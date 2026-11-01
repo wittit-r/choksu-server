@@ -6,7 +6,7 @@
 
 - **Runtime**: Node.js (ES Modules)
 - **Framework**: Express.js 5
-- **Database**: PostgreSQL ผ่าน Prisma 7.4 (pg adapter)
+- **Database**: MySQL ผ่าน Sequelize 6 (mysql2) — เวลาเก็บเป็นเวลาไทยตรงๆ (timezone +07:00)
 - **Validation**: Joi
 - **Caching**: Redis (ioredis)
 - **File Storage**: Cloudflare R2 (@aws-sdk/client-s3)
@@ -18,10 +18,10 @@
 
 ```
 backend/
-├── prisma/schema/               # Database schema (แยกตาม domain)
 └── src/
     ├── index.js                 # Express server entry point
-    ├── databases/               # Prisma + Redis client instances
+    ├── database/                # Sequelize instance + models (MySQL)
+    ├── databases/               # Redis client instance
     ├── controllers/             # Request handlers (class-based)
     ├── services/                # Business logic layer
     ├── routes/                  # API routes (*.routes.js per module, index.js รวมทั้งหมด)
@@ -160,18 +160,23 @@ GET /employees?page=1&limit=10&search=john
 
 ใช้ skill `/add-endpoint` สำหรับ workflow และ template code แบบเต็ม
 
-### เปลี่ยนแปลง Database Schema
+### Database Schema
 
-ใช้ skill `/prisma-db` สำหรับจัดการ database:
+แก้ไข models ที่ `src/database/models.js` แล้วรัน sync (dev-only):
 
 ```
-/prisma-db modify model <model_name>
-/prisma-db migrate <migration_name>
+node --env-file=.env -e "import('./src/database/index.js').then(async d => { await d.sequelize.sync({ alter: true }); await d.sequelize.close(); })"
 ```
 
-### Prisma Queries
+### ข้อมูล / ย้ายข้อมูล
 
-ดูตัวอย่าง queries ที่ `/prisma-query`
+```
+npm test                                    # รัน test suite (สร้าง choksu_test เอง)
+node --env-file=.env scripts/seed.js        # เติมข้อมูลมาตรฐาน (เติมเฉพาะของที่ขาด)
+node --env-file=.env scripts/seed.js --reset --yes   # ล้างทั้งหมดแล้ว seed ใหม่
+node scripts/migrate-from-pg.js             # ย้ายข้อมูลจาก PostgreSQL เดิม (ครั้งเดียว)
+node scripts/check-schema-parity.js         # เทียบ schema PG vs MySQL
+```
 
 ## Testing
 
@@ -223,8 +228,6 @@ npm run dev              # Start dev server
 ## Skills ที่ใช้ได้
 
 - `/add-endpoint` - สร้าง API endpoint ใหม่ (controller, service, route)
-- `/prisma-db` - จัดการ database (model, migration, reset)
-- `/prisma-query` - ตัวอย่าง Prisma queries
 - `/validate-data` - ตรวจสอบความถูกต้องของข้อมูลก่อนใช้งาน
 - `/business-rules` - Business logic knowledge base (payroll, timesheet, wage rate, calculation, validation)
 

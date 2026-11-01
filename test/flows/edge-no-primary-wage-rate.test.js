@@ -3,7 +3,7 @@ import { cleanDatabase, disconnectPrisma } from '../helpers/db.js';
 import { createTestAuth } from '../helpers/auth.js';
 import { seedTestData } from '../helpers/seed.js';
 import { createApiClient } from '../helpers/client.js';
-import prisma from '../../src/databases/prisma.js';
+import { WageRate } from '../../src/database/index.js';
 import IORedis from 'ioredis';
 
 // Regression: GET /pay-periods/:id เคย crash (TypeError → 500) เมื่อพนักงานมี payroll
@@ -32,10 +32,10 @@ describe('Edge: พนักงานไม่มี WageRate ณ วันเ�
 
     it('should return 200 with null positionCode and dailyRate 0 (not 500)', async () => {
         // ทำให้พนักงานคนที่ 5 มี rate เริ่มหลังวันเริ่มรอบ (06-02 > period start 06-01)
-        await prisma.wageRate.updateMany({
-            where: { employeeId: seed.employees[4].id },
-            data: { effectiveFrom: new Date('2025-06-02') },
-        });
+        await WageRate.update(
+            { effectiveFrom: new Date('2025-06-02') },
+            { where: { employeeId: seed.employees[4].id } },
+        );
 
         // สร้างรอบจ่าย 01-15 มิ.ย. + ลงเวลาทุกคนวันที่ 02 (วันที่ rate ของคนที่ 5 มีผลแล้ว)
         const periodRes = await api.createPayPeriod({

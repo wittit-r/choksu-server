@@ -1,4 +1,6 @@
-import prisma from "../databases/prisma.js";
+import { Op } from "sequelize";
+
+import { User, Session, sequelize } from "../database/index.js";
 import redis from "../databases/redis.js";
 import err from "../utils/error.js";
 import { hashPassword } from "../utils/password.js";
@@ -11,21 +13,6 @@ import { hashPassword } from "../utils/password.js";
  * @property {number} pagination.limit - จำนวนรายการต่อหน้า
  * @property {number} pagination.total - จำนวนรายการทั้งหมด
  * @property {number} pagination.totalPages - จำนวนหน้าทั้งหมด
- */
-
-/**
- * @typedef {Object} User
- * @property {string} id - User ID (UUID)
- * @property {string} firstName - ชื่อจริง
- * @property {string} lastName - นามสกุล
- * @property {string} username - ชื่อผู้ใช้
- * @property {string} [phone] - เบอร์โทรศัพท์
- * @property {string} role - บทบาท (ADMIN, ACCOUNTING, etc.)
- * @property {string} [branchId] - ID ของสาขา
- * @property {Object} [branch] - ข้อมูลสาขา
- * @property {boolean} isActive - สถานะการใช้งาน
- * @property {Date} createdAt - วันที่สร้าง
- * @property {Date} [updatedAt] - วันที่อัปเดต
  */
 
 /**
@@ -48,10 +35,11 @@ class UserService {
         const where = { isDeleted: false };
 
         if (query.search) {
-            where.OR = [
-                { firstName: { contains: query.search, mode: 'insensitive' } },
-                { lastName: { contains: query.search, mode: 'insensitive' } },
-                { username: { contains: query.search, mode: 'insensitive' } },
+            // collation ของ MySQL (utf8mb4_*_ai_ci) เทียบไม่สน case อยู่แล้ว
+            where[Op.or] = [
+                { firstName: { [Op.like]: `%${query.search}%` } },
+                { lastName: { [Op.like]: `%${query.search}%` } },
+                { username: { [Op.like]: `%${query.search}%` } },
             ];
         }
 
@@ -63,27 +51,14 @@ class UserService {
             where.isActive = query.isActive;
         }
 
-        const [users, total] = await Promise.all([
-            prisma.user.findMany({
-                where,
-                select: {
-                    id: true,
-                    firstName: true,
-                    lastName: true,
-                    username: true,
-                    phone: true,
-                    role: true,
-                    branchId: true,
-                    branch: { select: { id: true, name: true } },
-                    isActive: true,
-                    createdAt: true,
-                },
-                skip: (page - 1) * limit,
-                take: limit,
-                orderBy: { [sortBy]: sort },
-            }),
-            prisma.user.count({ where }),
-        ]);
+        const { rows: users, count: total } = await User.findAndCountAll({
+            where,
+            attributes: ["id", "firstName", "lastName", "username", "phone", "role", "branchId", "isActive", "createdAt"],
+            include: { association: "branch", attributes: ["id", "name"] },
+            offset: (page - 1) * limit,
+            limit,
+            order: [[sortBy, sort]],
+        });
 
         return {
             data: users,
@@ -94,26 +69,15 @@ class UserService {
     /**
      * ดึงข้อมูลผู้ใช้งานตาม ID
      * @param {Object} params - Parameters
-     * @param {string} params.id - User ID (UUID)
+     * @param {number} params.id - User ID
      * @returns {Promise<User>} ข้อมูลผู้ใช้งาน
      * @throws {AppError} ไม่พบผู้ใช้งาน (notFound)
      */
     async getUserById({ id }) {
-        const user = await prisma.user.findUnique({
+        const user = await User.findOne({
             where: { id, isDeleted: false },
-            select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                username: true,
-                phone: true,
-                role: true,
-                branchId: true,
-                branch: { select: { id: true, name: true } },
-                isActive: true,
-                createdAt: true,
-                updatedAt: true,
-            },
+            attributes: ["id", "firstName", "lastName", "username", "phone", "role", "branchId", "isActive", "createdAt", "updatedAt"],
+            include: { association: "branch", attributes: ["id", "name"] },
         });
 
         if (!user) throw err.notFound({ id });
@@ -123,70 +87,41 @@ class UserService {
     /**
      * สร้างผู้ใช้งานใหม่
      * @param {Object} params - ข้อมูลผู้ใช้งานใหม่
-     * @param {string} params.firstName - ชื่อจริง
-     * @param {string} params.lastName - นามสกุล
-     * @param {string} params.username - ชื่อผู้ใช้
-     * @param {string} params.password - รหัสผ่าน
-     * @param {string} [params.phone] - เบอร์โทรศัพท์
-     * @param {string} [params.role] - บทบาท (default: 'ACCOUNTING')
-     * @param {string} [params.branchId] - ID ของสาขา
      * @returns {Promise<User>} ข้อมูลผู้ใช้งานที่สร้างใหม่
      * @throws {AppError} ชื่อผู้ใช้ซ้ำ (conflict)
      */
     async createUser({ firstName, lastName, username, password, phone, role, branchId }) {
         // Check duplicate username
-        const existing = await prisma.user.findUnique({
+        const existing = await User.findOne({
             where: { username },
-            select: { id: true },
+            attributes: ["id"],
         });
         if (existing) throw err.conflict({ username }, "ชื่อผู้ใช้นี้ถูกใช้งานแล้ว");
 
-        const user = await prisma.user.create({
-            data: {
-                firstName,
-                lastName,
-                username,
-                passwordHash: await hashPassword(password),
-                phone,
-                role: role || 'ACCOUNTING',
-                branchId,
-            },
-            select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                username: true,
-                phone: true,
-                role: true,
-                branchId: true,
-                isActive: true,
-                createdAt: true,
-            },
+        return User.create({
+            firstName,
+            lastName,
+            username,
+            passwordHash: await hashPassword(password),
+            phone,
+            role: role || "ACCOUNTING",
+            branchId,
+        }, {
+            attributes: { exclude: ["passwordHash"] },
+            returning: true,
         });
-
-        return user;
     }
 
     /**
      * อัปเดตข้อมูลผู้ใช้งาน
      * @param {Object} params - ข้อมูลที่จะอัปเดต
-     * @param {string} params.id - User ID (UUID)
-     * @param {string} [params.firstName] - ชื่อจริง
-     * @param {string} [params.lastName] - นามสกุล
-     * @param {string} [params.username] - ชื่อผู้ใช้
-     * @param {string} [params.password] - รหัสผ่านใหม่
-     * @param {string} [params.phone] - เบอร์โทรศัพท์
-     * @param {string} [params.role] - บทบาท
-     * @param {string} [params.branchId] - ID ของสาขา
-     * @param {boolean} [params.isActive] - สถานะการใช้งาน
-     * @param {boolean} [params.isDeleted] - สถานะการลบ
      * @returns {Promise<User>} ข้อมูลผู้ใช้งานที่อัปเดตแล้ว
      * @throws {AppError} ไม่พบผู้ใช้งาน (notFound) หรือ ชื่อผู้ใช้ซ้ำ (conflict)
      */
     async updateUser({ id, ...updateData }) {
-        const user = await prisma.user.findUnique({
+        const user = await User.findOne({
             where: { id, isDeleted: false },
-            select: { id: true },
+            attributes: ["id"],
         });
         if (!user) throw err.notFound({ id });
 
@@ -200,8 +135,9 @@ class UserService {
         if (updateData.isDeleted !== undefined) data.isDeleted = updateData.isDeleted;
 
         if (updateData.username !== undefined) {
-            const existing = await prisma.user.findFirst({
-                where: { username: updateData.username, NOT: { id } },
+            const existing = await User.findOne({
+                where: { username: updateData.username, id: { [Op.ne]: id } },
+                attributes: ["id"],
             });
             if (existing) throw err.conflict({ username: updateData.username }, "ชื่อผู้ใช้นี้ถูกใช้งานแล้ว");
             data.username = updateData.username;
@@ -211,30 +147,18 @@ class UserService {
             data.passwordHash = await hashPassword(updateData.password);
         }
 
-        const updated = await prisma.$transaction(async (tx) => {
-            const updated = await tx.user.update({
-                where: { id },
-                data,
-                select: {
-                    id: true,
-                    firstName: true,
-                    lastName: true,
-                    username: true,
-                    phone: true,
-                    role: true,
-                    branchId: true,
-                    isActive: true,
-                    createdAt: true,
-                    updatedAt: true,
-                },
-            });
+        const updated = await sequelize.transaction(async (t) => {
+            await User.update(data, { where: { id }, transaction: t });
 
             // Invalidate sessions if password changed or account deactivated
             if (updateData.password !== undefined || updateData.isDeleted === true) {
-                await tx.session.deleteMany({ where: { userId: id } });
+                await Session.destroy({ where: { userId: id }, transaction: t });
             }
 
-            return updated;
+            return User.findByPk(id, {
+                attributes: ["id", "firstName", "lastName", "username", "phone", "role", "branchId", "isActive", "createdAt", "updatedAt"],
+                transaction: t,
+            });
         });
 
         // Clear Redis cache for this user

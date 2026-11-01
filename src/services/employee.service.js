@@ -1,6 +1,7 @@
-import prisma from "../databases/prisma.js";
+import { Op } from "sequelize";
+
+import { Employee, WageRate, Position, TimeEntry } from "../database/index.js";
 import err from "../utils/error.js";
-import prismaSelectDefault from "../utils/prismaSelectDefault.js";
 import { combineDateAndTime, toLocalDate, toLocalTime, formatMinutesToHours } from "../utils/date.js";
 
 /**
@@ -124,16 +125,76 @@ class EmployeeService {
      * @throws {AppError} ไม่พบตำแหน่งงาน (validation)
      */
     async _validatePositionExists(positionId) {
-        const position = await prisma.position.findUnique({
-            where: { id: positionId },
-            select: { id: true },
+        const position = await Position.findByPk(positionId, {
+            attributes: ["id"],
         });
 
         if (!position) {
-            throw err.validation({ positionId: 'ไม่พบตำแหน่งงาน' });
+            throw err.validation({ positionId: "ไม่พบตำแหน่งงาน" });
         }
 
         return position;
+    }
+
+    /**
+     * ดึง WageRate พร้อมข้อมูลตำแหน่งงาน (shape เดิมของ select: position มีแค่ name, employeeType —
+     * Sequelize เติม primary key ของ include ให้เอง จึงต้องเลือก field เอง)
+     * @private
+     * @param {number} wageId - WageRate ID
+     * @returns {Promise<Object>} WageRate (plain) พร้อม position
+     */
+    async _getWageWithPosition(wageId) {
+        const wage = await WageRate.findByPk(wageId, {
+            attributes: ["id", "dailyRate", "hourlyRate", "minuteRate", "monthlyRate", "effectiveFrom", "effectiveTo", "note"],
+            include: {
+                association: "position",
+                attributes: ["name", "employeeType"],
+            },
+        });
+        const plain = wage.toJSON();
+        plain.position = {
+            name: plain.position.name,
+            employeeType: plain.position.employeeType,
+        };
+        return plain;
+    }
+
+    /**
+     * ดึง WageRate ที่ active ณ ตอนนี้ อันแรก (effectiveFrom ล่าสุด) ของแต่ละ employee
+     * ทดแทน Prisma include wageRates { take: 1, orderBy: effectiveFrom desc }
+     * (Sequelize ทำ per-parent limit ใน include ไม่ได้ → query แยกแล้วเลือกอันแรกใน JS)
+     * @private
+     * @param {number[]} employeeIds - รายการ Employee ID
+     * @returns {Promise<Map<number, Object>>} Map employeeId → WageRate (plain object มี position)
+     */
+    async _getLatestActiveWageRates(employeeIds) {
+        const latestByEmployee = new Map();
+        if (!employeeIds || employeeIds.length === 0) {
+            return latestByEmployee;
+        }
+
+        const now = new Date();
+        const wageRates = await WageRate.findAll({
+            where: {
+                employeeId: { [Op.in]: employeeIds },
+                effectiveFrom: { [Op.lte]: now },
+                [Op.or]: [{ effectiveTo: null }, { effectiveTo: { [Op.gte]: now } }],
+            },
+            attributes: ["id", "employeeId", "positionId", "dailyRate", "effectiveFrom"],
+            include: {
+                association: "position",
+                attributes: ["id", "name", "employeeType"],
+            },
+            order: [["effectiveFrom", "DESC"]],
+        });
+
+        for (const wageRate of wageRates) {
+            if (!latestByEmployee.has(wageRate.employeeId)) {
+                latestByEmployee.set(wageRate.employeeId, wageRate.toJSON());
+            }
+        }
+
+        return latestByEmployee;
     }
 
     /**
@@ -154,14 +215,14 @@ class EmployeeService {
     async getEmployees({ page, limit, sort, sortBy, ...query }) {
         const where = {};
         const now = new Date();
+        const activeWageWindow = {
+            effectiveFrom: { [Op.lte]: now },
+            [Op.or]: [{ effectiveTo: null }, { effectiveTo: { [Op.gte]: now } }],
+        };
 
         if (query.search) {
-            where.OR = [
-                { firstName: { contains: query.search, mode: 'insensitive' } },
-                { lastName: { contains: query.search, mode: 'insensitive' } },
-                { idCard: query.search },
-                { phone: query.search },
-            ];
+            // collation ของ MySQL ไม่สน case อยู่แล้ว (แทน contains insensitive)
+            where[Op.or] = [{ firstName: { [Op.like]: `%${query.search}%` } }, { lastName: { [Op.like]: `%${query.search}%` } }, { idCard: query.search }, { phone: query.search }];
         }
 
         if (query.isActive !== undefined) {
@@ -172,90 +233,78 @@ class EmployeeService {
             where.workLeaderId = query.workLeaderId;
         }
 
+        // กรอง branchId ผ่าน relation workLeader (แทน Prisma where.workLeader = { branchId })
+        const workLeaderInclude = {
+            association: "workLeader",
+            attributes: ["id", "name"],
+            include: {
+                association: "branch",
+                attributes: ["id", "name", "fullname"],
+            },
+        };
         if (query.branchId !== undefined) {
-            where.workLeader = {
-                branchId: query.branchId,
-            };
+            workLeaderInclude.where = { branchId: query.branchId };
+            workLeaderInclude.required = true;
         }
 
-        // Filter by position (จาก WageRate ที่ active)
+        // Filter by position (จาก WageRate ที่ active) / employeeType (จาก Position ผ่าน WageRate ที่ active)
+        // ทดแทน where.wageRates = { some: {...} } ด้วย required include + where
+        // (INNER JOIN ที่มี where ใน ON = เงื่อนไข some ของ Prisma)
+        // หมายเหตุ: ห้ามใช้ where key '$wageRates.positionId$' ระดับบนสุด — Sequelize ไม่แปลง
+        // ชื่อ attribute เป็นชื่อคอลัมน์ (underscored) ในกรณีนี้ ทำให้เกิด Unknown column
+        // และห้ามใช้ nested include (position) ที่มี where ร่วมกับ subQuery pagination —
+        // Sequelize จะสร้าง join ซ้ำที่อ้าง alias ผิด (Unknown column 'wageRates.position_id')
+        // → employeeType จึงแปลงเป็นการดึง position ids ก่อนแล้วกรอง positionId IN (...)
+        // (คง behavior เดิม: ถ้าส่ง positionId และ employeeType พร้อมกัน filter ของ employeeType จะ override)
+        let wageFilterInclude = null;
         if (query.positionId !== undefined) {
-            where.wageRates = {
-                some: {
-                    positionId: query.positionId,
-                    effectiveFrom: { lte: now },
-                    OR: [
-                        { effectiveTo: null },
-                        { effectiveTo: { gte: now } },
-                    ],
-                },
+            wageFilterInclude = {
+                association: "wageRates",
+                attributes: [],
+                required: true,
+                where: { positionId: query.positionId, ...activeWageWindow },
             };
         }
-
-        // Filter by employeeType (จาก Position ผ่าน WageRate ที่ active)
         if (query.employeeType !== undefined) {
-            where.wageRates = {
-                some: {
-                    position: { employeeType: query.employeeType },
-                    effectiveFrom: { lte: now },
-                    OR: [
-                        { effectiveTo: null },
-                        { effectiveTo: { gte: now } },
-                    ],
+            const positions = await Position.findAll({
+                where: { employeeType: query.employeeType },
+                attributes: ["id"],
+            });
+            wageFilterInclude = {
+                association: "wageRates",
+                attributes: [],
+                required: true,
+                where: {
+                    positionId: { [Op.in]: positions.map((position) => position.id) },
+                    ...activeWageWindow,
                 },
             };
         }
 
-        const [ employees, total ] = await Promise.all([
-            prisma.employee.findMany({
-                where,
-                select: {
-                    ...prismaSelectDefault.employee,
-                    startDate: true,
-                    workLeader: {
-                        select: {
-                            id: true,
-                            name: true,
-                            branch: {
-                                select: prismaSelectDefault.branch,
-                            }
-                        }
-                    },
-                    // ดึง position และ employeeType จาก wageRate ที่ active
-                    wageRates: {
-                        where: {
-                            effectiveFrom: { lte: now },
-                            OR: [
-                                { effectiveTo: null },
-                                { effectiveTo: { gte: now } },
-                            ],
-                        },
-                        select: {
-                            position: {
-                                select: {
-                                    id: true,
-                                    name: true,
-                                    employeeType: true,
-                                },
-                            },
-                        },
-                        take: 1,
-                        orderBy: { effectiveFrom: 'desc' },
-                    },
-                },
-                skip: (page - 1) * limit,
-                take: limit,
-                orderBy: {
-                    [sortBy]: sort,
-                },
-            }),
-            prisma.employee.count({
-                where,
-            }),
-        ]);
+        const include = [workLeaderInclude];
+        if (wageFilterInclude) {
+            include.push(wageFilterInclude);
+        }
+
+        const { rows: employees, count: total } = await Employee.findAndCountAll({
+            where,
+            attributes: ["id", "firstName", "lastName", "phone", "shiftType", "isActive", "startDate"],
+            include,
+            distinct: true,
+            offset: (page - 1) * limit,
+            limit,
+            order: [[sortBy, sort]],
+        });
+
+        // ดึง position และ employeeType จาก wageRate ที่ active (ล่าสุด) แยกต่างหาก
+        const latestWageRates = await this._getLatestActiveWageRates(employees.map((emp) => emp.id));
 
         // Transform: flatten position from wageRates (employeeType อยู่ใน position)
-        const transformedEmployees = employees.map(emp => this._transformEmployee(emp));
+        const transformedEmployees = employees.map((emp) => {
+            const plain = emp.toJSON();
+            plain.wageRates = latestWageRates.has(emp.id) ? [latestWageRates.get(emp.id)] : [];
+            return this._transformEmployee(plain);
+        });
 
         return {
             data: transformedEmployees,
@@ -274,36 +323,30 @@ class EmployeeService {
      * @returns {Promise<Employee>} ข้อมูลพนักงานที่สร้างใหม่
      */
     async createEmployee({ firstName, lastName, idCard, phone, bankAccount, shiftType, workLeaderId, startDate }) {
-        const employee = await prisma.employee.create({
-            data: {
-                firstName,
-                lastName,
-                idCard,
-                phone,
-                bankAccount,
-                shiftType,
-                workLeaderId,
-                startDate: new Date(startDate),
-            },
-            select: {
-                ...prismaSelectDefault.employee,
-                bankAccount: true,
-                startDate: true,
-                createdAt: true,
-                updatedAt: true,
-                workLeader: {
-                    select: {
-                        id: true,
-                        name: true,
-                        branch: {
-                            select: prismaSelectDefault.branch,
-                        }
-                    }
+        const created = await Employee.create({
+            firstName,
+            lastName,
+            idCard,
+            phone,
+            bankAccount,
+            shiftType,
+            workLeaderId,
+            startDate: new Date(startDate),
+        });
+
+        const employee = await Employee.findByPk(created.id, {
+            attributes: ["id", "firstName", "lastName", "phone", "shiftType", "isActive", "bankAccount", "startDate", "createdAt", "updatedAt"],
+            include: {
+                association: "workLeader",
+                attributes: ["id", "name"],
+                include: {
+                    association: "branch",
+                    attributes: ["id", "name", "fullname"],
                 },
             },
         });
 
-        return this._transformEmployee(employee);
+        return this._transformEmployee(employee.toJSON());
     }
 
     /**
@@ -314,44 +357,14 @@ class EmployeeService {
      * @throws {AppError} ไม่พบพนักงาน (notFound)
      */
     async getEmployeeById({ id }) {
-        const employee = await prisma.employee.findUnique({
-            where: { id },
-            select: {
-                ...prismaSelectDefault.employee,
-                idCard: true,
-                bankAccount: true,
-                startDate: true,
-                createdAt: true,
-                updatedAt: true,
-                workLeader: {
-                    select: {
-                        id: true,
-                        name: true,
-                        branch: {
-                            select: prismaSelectDefault.branch,
-                        }
-                    }
-                },
-                // ดึง position และ employeeType จาก wageRate ที่ active
-                wageRates: {
-                    where: {
-                        effectiveFrom: { lte: new Date() },
-                        OR: [
-                            { effectiveTo: null },
-                            { effectiveTo: { gte: new Date() } },
-                        ],
-                    },
-                    select: {
-                        position: {
-                            select: {
-                                id: true,
-                                name: true,
-                                employeeType: true,
-                            },
-                        },
-                    },
-                    take: 1,
-                    orderBy: { effectiveFrom: 'desc' },
+        const employee = await Employee.findByPk(id, {
+            attributes: ["id", "firstName", "lastName", "phone", "shiftType", "isActive", "idCard", "bankAccount", "startDate", "createdAt", "updatedAt"],
+            include: {
+                association: "workLeader",
+                attributes: ["id", "name"],
+                include: {
+                    association: "branch",
+                    attributes: ["id", "name", "fullname"],
                 },
             },
         });
@@ -360,7 +373,12 @@ class EmployeeService {
             throw err.notFound({ id });
         }
 
-        return this._transformEmployee(employee);
+        // ดึง position และ employeeType จาก wageRate ที่ active (ล่าสุด)
+        const latestWageRates = await this._getLatestActiveWageRates([id]);
+        const plain = employee.toJSON();
+        plain.wageRates = latestWageRates.has(id) ? [latestWageRates.get(id)] : [];
+
+        return this._transformEmployee(plain);
     }
 
     /**
@@ -372,19 +390,17 @@ class EmployeeService {
      */
     async updateEmployee(id, { firstName, lastName, idCard, phone, bankAccount, shiftType, workLeaderId, startDate, isActive }) {
         // ตรวจสอบว่ามี employee อยู่จริง
-        const employee = await prisma.employee.findUnique({
-            where: { id },
-            select: { id: true }, // เช็คเฉพาะ id เพื่อประหยัด resource
+        const employee = await Employee.findByPk(id, {
+            attributes: ["id"], // เช็คเฉพาะ id เพื่อประหยัด resource
         });
 
         if (!employee) {
             throw err.notFound({ id });
         }
 
-        // อัปเดตเฉพาะฟิลด์ที่ส่งมา และ select เฉพาะฟิลด์ที่ต้องการคืนค่า
-        const updated = await prisma.employee.update({
-            where: { id },
-            data: {
+        // อัปเดตเฉพาะฟิลด์ที่ส่งมา
+        await Employee.update(
+            {
                 ...(firstName !== undefined && { firstName }),
                 ...(lastName !== undefined && { lastName }),
                 ...(idCard !== undefined && { idCard }),
@@ -395,47 +411,27 @@ class EmployeeService {
                 ...(startDate !== undefined && { startDate }),
                 ...(isActive !== undefined && { isActive }),
             },
-            select: {
-                ...prismaSelectDefault.employee,
-                idCard: true,
-                bankAccount: true,
-                startDate: true,
-                createdAt: true,
-                updatedAt: true,
-                workLeader: {
-                    select: {
-                        id: true,
-                        name: true,
-                        branch: {
-                            select: prismaSelectDefault.branch,
-                        }
-                    }
-                },
-                // ดึง position และ employeeType จาก wageRate ที่ active
-                wageRates: {
-                    where: {
-                        effectiveFrom: { lte: new Date() },
-                        OR: [
-                            { effectiveTo: null },
-                            { effectiveTo: { gte: new Date() } },
-                        ],
-                    },
-                    select: {
-                        position: {
-                            select: {
-                                id: true,
-                                name: true,
-                                employeeType: true,
-                            },
-                        },
-                    },
-                    take: 1,
-                    orderBy: { effectiveFrom: 'desc' },
+            { where: { id } },
+        );
+
+        const updated = await Employee.findByPk(id, {
+            attributes: ["id", "firstName", "lastName", "phone", "shiftType", "isActive", "idCard", "bankAccount", "startDate", "createdAt", "updatedAt"],
+            include: {
+                association: "workLeader",
+                attributes: ["id", "name"],
+                include: {
+                    association: "branch",
+                    attributes: ["id", "name", "fullname"],
                 },
             },
         });
 
-        return this._transformEmployee(updated);
+        // ดึง position และ employeeType จาก wageRate ที่ active (ล่าสุด)
+        const latestWageRates = await this._getLatestActiveWageRates([id]);
+        const plain = updated.toJSON();
+        plain.wageRates = latestWageRates.has(id) ? [latestWageRates.get(id)] : [];
+
+        return this._transformEmployee(plain);
     }
 
     /**
@@ -451,9 +447,8 @@ class EmployeeService {
      */
     async getWagesByEmployeeId({ employeeId, page, limit, sort, sortBy }) {
         // ตรวจสอบว่า employee มีอยู่จริง
-        const employee = await prisma.employee.findUnique({
-            where: { id: employeeId },
-            select: { id: true },
+        const employee = await Employee.findByPk(employeeId, {
+            attributes: ["id"],
         });
 
         if (!employee) {
@@ -462,27 +457,17 @@ class EmployeeService {
 
         const where = { employeeId };
 
-        const [wages, total] = await Promise.all([
-            prisma.wageRate.findMany({
-                where,
-                select: {
-                    ...prismaSelectDefault.wageRate,
-                    position: {
-                        select: {
-                            id: true,
-                            name: true,
-                            employeeType: true,
-                        }
-                    }
-                },
-                skip: (page - 1) * limit,
-                take: limit,
-                orderBy: {
-                    [sortBy]: sort,
-                },
-            }),
-            prisma.wageRate.count({ where }),
-        ]);
+        const { rows: wages, count: total } = await WageRate.findAndCountAll({
+            where,
+            attributes: ["id", "dailyRate", "hourlyRate", "minuteRate", "monthlyRate", "effectiveFrom", "effectiveTo", "note"],
+            include: {
+                association: "position",
+                attributes: ["id", "name", "employeeType"],
+            },
+            offset: (page - 1) * limit,
+            limit,
+            order: [[sortBy, sort]],
+        });
 
         return {
             data: wages,
@@ -503,9 +488,8 @@ class EmployeeService {
      */
     async createWage({ employeeId, positionId, dailyRate, hourlyRate, minuteRate, monthlyRate, effectiveFrom, effectiveTo, note }) {
         // ตรวจสอบ employee มีอยู่จริง
-        const employee = await prisma.employee.findUnique({
-            where: { id: employeeId },
-            select: { id: true },
+        const employee = await Employee.findByPk(employeeId, {
+            attributes: ["id"],
         });
 
         if (!employee) {
@@ -515,30 +499,19 @@ class EmployeeService {
         // ตรวจสอบ positionId มีอยู่จริง
         await this._validatePositionExists(positionId);
 
-        const wage = await prisma.wageRate.create({
-            data: {
-                employeeId,
-                positionId,
-                dailyRate,
-                hourlyRate,
-                minuteRate,
-                monthlyRate,
-                effectiveFrom: new Date(effectiveFrom),
-                effectiveTo: effectiveTo ? new Date(effectiveTo) : null,
-                note,
-            },
-            select: {
-                ...prismaSelectDefault.wageRate,
-                position: {
-                    select: {
-                        name: true,
-                        employeeType: true,
-                    }
-                }
-            },
+        const wage = await WageRate.create({
+            employeeId,
+            positionId,
+            dailyRate,
+            hourlyRate,
+            minuteRate,
+            monthlyRate,
+            effectiveFrom: new Date(effectiveFrom),
+            effectiveTo: effectiveTo ? new Date(effectiveTo) : null,
+            note,
         });
 
-        return wage;
+        return this._getWageWithPosition(wage.id);
     }
 
     /**
@@ -551,51 +524,41 @@ class EmployeeService {
      * @throws {AppError} ไม่พบพนักงาน (notFound)
      */
     async getTimeEntries({ employeeId, startDate, endDate }) {
-        const startOfDay = combineDateAndTime(startDate, '00:00:00');
-        const endOfDay = combineDateAndTime(endDate, '23:59:59');
-        const timeEntries = await prisma.timeEntry.findMany({
+        const startOfDay = combineDateAndTime(startDate, "00:00:00");
+        const endOfDay = combineDateAndTime(endDate, "23:59:59");
+        const timeEntries = await TimeEntry.findAll({
             where: {
                 employeeId,
                 startTime: {
-                    gte: startOfDay,
-                    lte: endOfDay,
+                    [Op.gte]: startOfDay,
+                    [Op.lte]: endOfDay,
                 },
                 workType: {
-                    in: ['REGULAR', 'OVERTIME', 'ACCOMMODATION'],
+                    [Op.in]: ["REGULAR", "OVERTIME", "ACCOMMODATION"],
                 },
             },
-            select: {
-                id: true,
-                startTime: true,
-                endTime: true,
-                workType: true,
-                shiftType: true,
-                otRate: true,
-                accommodation: true,
-                paidValue: true,
-                paidDate: true,
-                isNegative: true,
-                isRetro: true,
-                referenceEntryId: true,
-            },
-            orderBy: {
-                startTime: 'asc',
-            },
+            attributes: ["id", "startTime", "endTime", "workType", "shiftType", "otRate", "accommodation", "paidValue", "paidDate", "isNegative", "isRetro", "referenceEntryId"],
+            order: [["startTime", "ASC"]],
         });
 
         // Pre-fill all dates in the range
         const groupedByDate = {};
-        const currentDate = combineDateAndTime(startDate, '00:00:00');
-        const lastDate = combineDateAndTime(endDate, '00:00:00');
+        const currentDate = combineDateAndTime(startDate, "00:00:00");
+        const lastDate = combineDateAndTime(endDate, "00:00:00");
         while (currentDate <= lastDate) {
             const dateKey = toLocalDate(currentDate);
-            groupedByDate[dateKey] = { date: dateKey, regular: [], ot: [], accommodation: [] };
+            groupedByDate[dateKey] = {
+                date: dateKey,
+                regular: [],
+                ot: [],
+                accommodation: [],
+            };
             currentDate.setDate(currentDate.getDate() + 1);
         }
 
         // Separate normal and related (negative/retro) entries
-        const normalEntries = timeEntries.filter(e => !e.isNegative && !e.isRetro);
-        const relatedEntries = timeEntries.filter(e => e.isNegative || e.isRetro);
+        const normalEntries = timeEntries.filter((e) => !e.isNegative && !e.isRetro);
+        const relatedEntries = timeEntries.filter((e) => e.isNegative || e.isRetro);
 
         // Map for lookup: normal entry id -> { dateKey, workType, timeRange }
         const entryMap = new Map();
@@ -603,15 +566,15 @@ class EmployeeService {
         // Helper: build timeRange string from start/end times
         const buildTimeRange = (startTime, endTime) => {
             const start = toLocalTime(startTime);
-            const end = endTime ? toLocalTime(endTime) : '';
+            const end = endTime ? toLocalTime(endTime) : "";
             return `${start} - ${end}`;
         };
 
         // Helper: get bucket key from workType
         const workTypeBucket = (workType) => {
-            if (workType === 'REGULAR') return 'regular';
-            if (workType === 'OVERTIME') return 'ot';
-            return 'accommodation';
+            if (workType === "REGULAR") return "regular";
+            if (workType === "OVERTIME") return "ot";
+            return "accommodation";
         };
 
         // Group normal entries
@@ -621,14 +584,12 @@ class EmployeeService {
 
             let totalMinutes = 0;
             if (entry.endTime) {
-                totalMinutes = Math.round(
-                    (entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60),
-                );
+                totalMinutes = Math.round((entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60));
             }
 
-            if (entry.workType === 'REGULAR') {
+            if (entry.workType === "REGULAR") {
                 let effectiveMinutes = totalMinutes;
-                if (entry.shiftType === 'REGULAR' && entry.endTime) {
+                if (entry.shiftType === "REGULAR" && entry.endTime) {
                     const lunchStart = 12 * 60;
                     const lunchEnd = 13 * 60;
                     const startMinutes = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
@@ -636,7 +597,7 @@ class EmployeeService {
                     const overlapStart = Math.max(startMinutes, lunchStart);
                     const overlapEnd = Math.min(endMinutes, lunchEnd);
                     if (overlapStart < overlapEnd) {
-                        effectiveMinutes -= (overlapEnd - overlapStart);
+                        effectiveMinutes -= overlapEnd - overlapStart;
                     }
                 }
                 const days = Math.floor((effectiveMinutes / 480) * 100) / 100;
@@ -653,7 +614,7 @@ class EmployeeService {
                     isRetro: false,
                     referenceEntryId: null,
                 });
-            } else if (entry.workType === 'OVERTIME') {
+            } else if (entry.workType === "OVERTIME") {
                 const rate = entry.otRate ? Number(entry.otRate) : 1;
                 groupedByDate[dateKey].ot.push({
                     id: entry.id,
@@ -669,7 +630,7 @@ class EmployeeService {
                     isRetro: false,
                     referenceEntryId: null,
                 });
-            } else if (entry.workType === 'ACCOMMODATION') {
+            } else if (entry.workType === "ACCOMMODATION") {
                 groupedByDate[dateKey].accommodation.push({
                     id: entry.id,
                     accommodation: Number(entry.accommodation),
@@ -697,14 +658,12 @@ class EmployeeService {
                 const timeRange = buildTimeRange(entry.startTime, entry.endTime);
                 let totalMinutes = 0;
                 if (entry.endTime) {
-                    totalMinutes = Math.round(
-                        (entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60),
-                    );
+                    totalMinutes = Math.round((entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60));
                 }
 
-                if (entry.workType === 'REGULAR') {
+                if (entry.workType === "REGULAR") {
                     let effectiveMinutes = totalMinutes;
-                    if (entry.shiftType === 'REGULAR' && entry.endTime) {
+                    if (entry.shiftType === "REGULAR" && entry.endTime) {
                         const lunchStart = 12 * 60;
                         const lunchEnd = 13 * 60;
                         const startMinutes = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
@@ -712,7 +671,7 @@ class EmployeeService {
                         const overlapStart = Math.max(startMinutes, lunchStart);
                         const overlapEnd = Math.min(endMinutes, lunchEnd);
                         if (overlapStart < overlapEnd) {
-                            effectiveMinutes -= (overlapEnd - overlapStart);
+                            effectiveMinutes -= overlapEnd - overlapStart;
                         }
                     }
                     const days = Math.floor((effectiveMinutes / 480) * 100) / 100;
@@ -725,7 +684,7 @@ class EmployeeService {
                         paidValue: entry.paidValue,
                         paidDate: entry.paidDate,
                     });
-                } else if (entry.workType === 'OVERTIME') {
+                } else if (entry.workType === "OVERTIME") {
                     const rate = entry.otRate ? Number(entry.otRate) : 1;
                     bucket.push({
                         id: entry.id,
@@ -737,7 +696,7 @@ class EmployeeService {
                         paidValue: entry.paidValue,
                         paidDate: entry.paidDate,
                     });
-                } else if (entry.workType === 'ACCOMMODATION') {
+                } else if (entry.workType === "ACCOMMODATION") {
                     bucket.push({
                         id: entry.id,
                         isNegative: true,
@@ -793,7 +752,7 @@ class EmployeeService {
                 totalOtByRate[rateKey] += ot.totalMinutes;
             }
 
-            totalAccommodation += day.accommodation.filter(a => !a.isRetro).length;
+            totalAccommodation += day.accommodation.filter((a) => !a.isRetro).length;
         }
 
         const formattedOtByRate = {};
@@ -813,7 +772,7 @@ class EmployeeService {
             date: day.date,
             regular: day.regular.map(({ totalMinutes, ...rest }) => rest),
             ot: day.ot.map(({ totalMinutes, ...rest }) => rest),
-            accommodation: day.accommodation.map(item => item),
+            accommodation: day.accommodation.map((item) => item),
         }));
 
         return { data: cleanData, summary };
@@ -829,9 +788,8 @@ class EmployeeService {
      */
     async updateWage(wageId, employeeId, { positionId, dailyRate, hourlyRate, minuteRate, monthlyRate, effectiveFrom, effectiveTo, note }) {
         // ตรวจสอบ wage มีอยู่จริงและเป็นของ employee คนนี้
-        const wage = await prisma.wageRate.findUnique({
-            where: { id: wageId },
-            select: { id: true, employeeId: true },
+        const wage = await WageRate.findByPk(wageId, {
+            attributes: ["id", "employeeId"],
         });
 
         if (!wage) {
@@ -839,7 +797,7 @@ class EmployeeService {
         }
 
         if (wage.employeeId !== employeeId) {
-            throw err.notFound({ wageId: 'ไม่พบค่าแรงของพนักงานคนนี้' });
+            throw err.notFound({ wageId: "ไม่พบค่าแรงของพนักงานคนนี้" });
         }
 
         // ถ้ามี positionId ให้ตรวจสอบว่า position มีอยู่จริง
@@ -852,33 +810,30 @@ class EmployeeService {
         const finalEffectiveTo = effectiveTo !== undefined ? (effectiveTo ? new Date(effectiveTo) : null) : undefined;
 
         if (finalEffectiveTo && finalEffectiveFrom && finalEffectiveTo <= finalEffectiveFrom) {
-            throw err.validation({ effectiveTo: 'วันที่สิ้นสุดต้องมากกว่าวันที่เริ่มต้น' });
+            throw err.validation({
+                effectiveTo: "วันที่สิ้นสุดต้องมากกว่าวันที่เริ่มต้น",
+            });
         }
 
-        const updated = await prisma.wageRate.update({
-            where: { id: wageId },
-            data: {
+        await WageRate.update(
+            {
                 ...(positionId !== undefined && { positionId }),
                 ...(dailyRate !== undefined && { dailyRate }),
                 ...(hourlyRate !== undefined && { hourlyRate }),
                 ...(minuteRate !== undefined && { minuteRate }),
                 ...(monthlyRate !== undefined && { monthlyRate }),
-                ...(finalEffectiveFrom !== undefined && { effectiveFrom: finalEffectiveFrom }),
-                ...(finalEffectiveTo !== undefined && { effectiveTo: finalEffectiveTo }),
+                ...(finalEffectiveFrom !== undefined && {
+                    effectiveFrom: finalEffectiveFrom,
+                }),
+                ...(finalEffectiveTo !== undefined && {
+                    effectiveTo: finalEffectiveTo,
+                }),
                 ...(note !== undefined && { note }),
             },
-            select: {
-                ...prismaSelectDefault.wageRate,
-                position: {
-                    select: {
-                        name: true,
-                        employeeType: true,
-                    }
-                }
-            },
-        });
+            { where: { id: wageId } },
+        );
 
-        return updated;
+        return this._getWageWithPosition(wageId);
     }
 
     /**
@@ -890,99 +845,61 @@ class EmployeeService {
      * @returns {Promise<Array>} รายการพนักงานพร้อมรายละเอียดส่วนต่าง
      */
     async calculateRetroactive({ startDate, endDate }) {
-        const startOfDay = combineDateAndTime(startDate, '00:00:00');
-        const endOfDay = combineDateAndTime(endDate, '23:59:59');
+        const startOfDay = combineDateAndTime(startDate, "00:00:00");
+        const endOfDay = combineDateAndTime(endDate, "23:59:59");
 
         // Step 1: ดึง paid entries ทั้งหมดในช่วงเวลา (REGULAR, OVERTIME เท่านั้น)
-        const paidEntries = await prisma.timeEntry.findMany({
+        const paidEntries = await TimeEntry.findAll({
             where: {
-                startTime: { gte: startOfDay, lte: endOfDay },
-                workType: { in: ['REGULAR', 'OVERTIME'] },
-                paidDate: { not: null },
+                startTime: { [Op.gte]: startOfDay, [Op.lte]: endOfDay },
+                workType: { [Op.in]: ["REGULAR", "OVERTIME"] },
+                paidDate: { [Op.not]: null },
                 isNegative: false,
                 isRetro: false,
             },
-            select: {
-                id: true,
-                timeSheetId: true,
-                employeeId: true,
-                startTime: true,
-                endTime: true,
-                workType: true,
-                shiftType: true,
-                otRate: true,
-                paidValue: true,
-            },
-            orderBy: { startTime: 'asc' },
+            attributes: ["id", "timeSheetId", "employeeId", "startTime", "endTime", "workType", "shiftType", "otRate", "paidValue"],
+            order: [["startTime", "ASC"]],
         });
         if (paidEntries.length === 0) {
             return { data: [], summary: { totalEmployees: 0, totalDiff: 0 } };
         }
 
         // Extract unique employeeIds
-        const uniqueEmployeeIds = [...new Set(paidEntries.map(e => e.employeeId))];
+        const uniqueEmployeeIds = [...new Set(paidEntries.map((e) => e.employeeId))];
 
         // Step 2: ดึง employee info + current wage rate สำหรับแต่ละคน
-        const now = new Date();
-        const employees = await prisma.employee.findMany({
-            where: { id: { in: uniqueEmployeeIds } },
-            select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                wageRates: {
-                    where: {
-                        effectiveFrom: { lte: now },
-                        OR: [
-                            { effectiveTo: null },
-                            { effectiveTo: { gte: now } },
-                        ],
-                    },
-                    select: {
-                        id: true,
-                        dailyRate: true,
-                        position: {
-                            select: { employeeType: true },
-                        },
-                    },
-                    take: 1,
-                    orderBy: { effectiveFrom: 'desc' },
-                },
-            },
+        const employeeRows = await Employee.findAll({
+            where: { id: { [Op.in]: uniqueEmployeeIds } },
+            attributes: ["id", "firstName", "lastName"],
+        });
+        const latestWageRates = await this._getLatestActiveWageRates(uniqueEmployeeIds);
+        const employees = employeeRows.map((emp) => {
+            const plain = emp.toJSON();
+            plain.wageRates = latestWageRates.has(emp.id) ? [latestWageRates.get(emp.id)] : [];
+            return plain;
         });
 
         // ดึง negative entries และ retro entries ที่มีอยู่แล้ว (เพื่อเช็คซ้ำ)
-        const originalIds = paidEntries.map(e => e.id);
+        const originalIds = paidEntries.map((e) => e.id);
         const [negativeEntries, existingRetroEntries] = await Promise.all([
-            prisma.timeEntry.findMany({
+            TimeEntry.findAll({
                 where: {
-                    referenceEntryId: { in: originalIds },
+                    referenceEntryId: { [Op.in]: originalIds },
                     isNegative: true,
                 },
-                select: {
-                    id: true,
-                    referenceEntryId: true,
-                    paidValue: true,
-                    startTime: true,
-                    endTime: true,
-                    workType: true,
-                    shiftType: true,
-                },
+                attributes: ["id", "referenceEntryId", "paidValue", "startTime", "endTime", "workType", "shiftType"],
             }),
-            prisma.timeEntry.findMany({
+            TimeEntry.findAll({
                 where: {
-                    referenceEntryId: { in: originalIds },
+                    referenceEntryId: { [Op.in]: originalIds },
                     isRetro: true,
                 },
-                select: {
-                    id: true,
-                    referenceEntryId: true,
-                },
+                attributes: ["id", "referenceEntryId"],
             }),
         ]);
 
         // Map existing retro entries สำหรับเช็คซ้ำ
-        const existingRetroMap = new Map(existingRetroEntries.map(r => [r.referenceEntryId, r.id]));
+        const existingRetroMap = new Map(existingRetroEntries.map((r) => [r.referenceEntryId, r.id]));
 
         // Group negative entries by referenceEntryId
         const negativeByOriginal = new Map();
@@ -1003,7 +920,7 @@ class EmployeeService {
         }
 
         // Map employees for quick lookup
-        const employeeMap = new Map(employees.map(e => [e.id, e]));
+        const employeeMap = new Map(employees.map((e) => [e.id, e]));
 
         // Step 3: คำนวณสำหรับแต่ละพนักงาน
         const results = [];
@@ -1018,7 +935,7 @@ class EmployeeService {
             const employeeType = currentWage.position?.employeeType;
 
             // TODO: รองรับ Driver (monthlyRate) - ต้องมี logic คำนวณแยก
-            if (employeeType === 'DRIVER') continue;
+            if (employeeType === "DRIVER") continue;
 
             const retroEntries = [];
 
@@ -1042,12 +959,10 @@ class EmployeeService {
                 // คำนวณ effective minutes ของ original entry
                 let originalMinutes = 0;
                 if (entry.endTime) {
-                    originalMinutes = Math.round(
-                        (entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60),
-                    );
+                    originalMinutes = Math.round((entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60));
 
                     // หักเวลาพักเที่ยงสำหรับ REGULAR shift
-                    if (entry.workType === 'REGULAR' && entry.shiftType === 'REGULAR') {
+                    if (entry.workType === "REGULAR" && entry.shiftType === "REGULAR") {
                         const lunchStart = 12 * 60;
                         const lunchEnd = 13 * 60;
                         const startMin = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
@@ -1055,7 +970,7 @@ class EmployeeService {
                         const overlapStart = Math.max(startMin, lunchStart);
                         const overlapEnd = Math.min(endMin, lunchEnd);
                         if (overlapStart < overlapEnd) {
-                            originalMinutes -= (overlapEnd - overlapStart);
+                            originalMinutes -= overlapEnd - overlapStart;
                         }
                     }
                 }
@@ -1069,11 +984,9 @@ class EmployeeService {
                     totalNegativePaid += Number(neg.paidValue || 0);
 
                     if (neg.endTime) {
-                        let negMinutes = Math.round(
-                            (neg.endTime.getTime() - neg.startTime.getTime()) / (1000 * 60),
-                        );
+                        let negMinutes = Math.round((neg.endTime.getTime() - neg.startTime.getTime()) / (1000 * 60));
 
-                        if (neg.workType === 'REGULAR' && neg.shiftType === 'REGULAR') {
+                        if (neg.workType === "REGULAR" && neg.shiftType === "REGULAR") {
                             const lunchStart = 12 * 60;
                             const lunchEnd = 13 * 60;
                             const startMin = neg.startTime.getHours() * 60 + neg.startTime.getMinutes();
@@ -1081,7 +994,7 @@ class EmployeeService {
                             const overlapStart = Math.max(startMin, lunchStart);
                             const overlapEnd = Math.min(endMin, lunchEnd);
                             if (overlapStart < overlapEnd) {
-                                negMinutes -= (overlapEnd - overlapStart);
+                                negMinutes -= overlapEnd - overlapStart;
                             }
                         }
 
@@ -1094,9 +1007,9 @@ class EmployeeService {
 
                 // คำนวณ newAmount ด้วย current rate
                 let newAmount = 0;
-                if (entry.workType === 'REGULAR') {
+                if (entry.workType === "REGULAR") {
                     newAmount = netMinutes * (currentDailyRate / 480);
-                } else if (entry.workType === 'OVERTIME') {
+                } else if (entry.workType === "OVERTIME") {
                     const otMultiplier = Number(entry.otRate) || 1;
                     newAmount = netMinutes * (currentDailyRate / 480) * otMultiplier;
                 }
@@ -1105,20 +1018,18 @@ class EmployeeService {
 
                 if (diffAmount > 0) {
                     // สร้าง retro entry
-                    const retroEntry = await prisma.timeEntry.create({
-                        data: {
-                            timeSheetId: entry.timeSheetId,
-                            employeeId: entry.employeeId,
-                            startTime: entry.startTime,
-                            endTime: null,
-                            shiftType: entry.shiftType,
-                            workType: entry.workType,
-                            otRate: entry.workType === 'OVERTIME' ? entry.otRate : 0,
-                            isRetro: true,
-                            referenceEntryId: entry.id,
-                            paidValue: diffAmount,
-                            note: `จ่ายเพิ่มย้อนหลัง (อ้างอิง entry #${entry.id})`,
-                        },
+                    const retroEntry = await TimeEntry.create({
+                        timeSheetId: entry.timeSheetId,
+                        employeeId: entry.employeeId,
+                        startTime: entry.startTime,
+                        endTime: null,
+                        shiftType: entry.shiftType,
+                        workType: entry.workType,
+                        otRate: entry.workType === "OVERTIME" ? entry.otRate : 0,
+                        isRetro: true,
+                        referenceEntryId: entry.id,
+                        paidValue: diffAmount,
+                        note: `จ่ายเพิ่มย้อนหลัง (อ้างอิง entry #${entry.id})`,
                     });
 
                     retroEntries.push({
@@ -1134,9 +1045,7 @@ class EmployeeService {
                 }
             }
 
-            const totalDiff = retroEntries
-                .filter(e => !e.skipped)
-                .reduce((sum, e) => sum + (e.diffAmount || 0), 0);
+            const totalDiff = retroEntries.filter((e) => !e.skipped).reduce((sum, e) => sum + (e.diffAmount || 0), 0);
 
             if (retroEntries.length > 0) {
                 grandTotalDiff += totalDiff;

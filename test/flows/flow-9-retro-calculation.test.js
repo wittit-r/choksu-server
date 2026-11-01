@@ -3,7 +3,7 @@ import { cleanDatabase, disconnectPrisma } from '../helpers/db.js';
 import { createTestAuth } from '../helpers/auth.js';
 import { seedTestData } from '../helpers/seed.js';
 import { createApiClient } from '../helpers/client.js';
-import prisma from '../../src/databases/prisma.js';
+import { TimeEntry, WageRate } from '../../src/database/index.js';
 import IORedis from 'ioredis';
 
 describe('Flow 9: Retro — อัตราค่าจ้างเปลี่ยนกลางสัญญา', () => {
@@ -63,9 +63,9 @@ describe('Flow 9: Retro — อัตราค่าจ้างเปลี่�
         expect(payroll.status).toBe('PENDING');
 
         // ตรวจสอบ time entry ใน DB — มี paidValue แต่ paidDate เป็น null
-        const entries = await prisma.timeEntry.findMany({
+        const entries = await TimeEntry.findAll({
             where: { employeeId, isNegative: false, isRetro: false },
-            select: { id: true, paidValue: true, paidDate: true },
+            attributes: ['id', 'paidValue', 'paidDate'],
         });
         expect(entries.length).toBe(1);
         expect(entries[0].paidValue).not.toBeNull();
@@ -74,34 +74,30 @@ describe('Flow 9: Retro — อัตราค่าจ้างเปลี่�
         // Step 3: เลียนแบบ "จ่ายเงินแล้ว" — set paidDate ด้วยมือ
         // (เนื่องจาก flow จ่ายจริงยังไม่ implement paidDate)
         const paidDate = new Date('2025-06-15T12:00:00');
-        await prisma.timeEntry.update({
-            where: { id: entries[0].id },
-            data: { paidDate },
-        });
+        await TimeEntry.update(
+            { paidDate },
+            { where: { id: entries[0].id } },
+        );
 
-        const entryAfterPaid = await prisma.timeEntry.findUnique({
-            where: { id: entries[0].id },
-            select: { paidValue: true, paidDate: true },
+        const entryAfterPaid = await TimeEntry.findByPk(entries[0].id, {
+            attributes: ['paidValue', 'paidDate'],
         });
         console.log('[INFO] After paidDate set — paidValue:', Number(entryAfterPaid.paidValue), 'paidDate:', entryAfterPaid.paidDate);
 
         // Step 4: เปลี่ยนอัตราค่าจ้าง (ปิดอัตราเก่า เปิดอัตราใหม่)
-        await prisma.wageRate.updateMany({
-            where: { employeeId, effectiveTo: null },
-            data: { effectiveTo: new Date('2025-06-10') },
-        });
+        await WageRate.update(
+            { effectiveTo: new Date('2025-06-10') },
+            { where: { employeeId, effectiveTo: null } },
+        );
 
-        await prisma.wageRate.create({
-            data: {
-                employeeId,
-                positionId: seed.workerPosition.id,
-                dailyRate: 550,
-                hourlyRate: 68.75,
-                minuteRate: 1.146,
-                monthlyRate: 0,
-                effectiveFrom: new Date('2025-06-11'),
-                effectiveTo: null,
-            },
+        await WageRate.create({
+            employeeId,
+            positionId: seed.workerPosition.id,
+            dailyRate: 550,
+            hourlyRate: 68.75,
+            minuteRate: 1.146,
+            monthlyRate: 0,
+            effectiveFrom: new Date('2025-06-11'),
         });
 
         console.log('[INFO] Wage rate changed: 500/day → 550/day (effective 2025-06-11)');
@@ -124,17 +120,9 @@ describe('Flow 9: Retro — อัตราค่าจ้างเปลี่�
         expect(retroSummary.totalEmployees).toBeGreaterThanOrEqual(1);
 
         // ตรวจสอบ retro entries ที่ถูกสร้างใน DB
-        const retroEntries = await prisma.timeEntry.findMany({
+        const retroEntries = await TimeEntry.findAll({
             where: { employeeId, isRetro: true },
-            select: {
-                id: true,
-                isRetro: true,
-                referenceEntryId: true,
-                paidValue: true,
-                workType: true,
-                shiftType: true,
-                note: true,
-            },
+            attributes: ['id', 'isRetro', 'referenceEntryId', 'paidValue', 'workType', 'shiftType', 'note'],
         });
 
         console.log('[INFO] Retro entries in DB:', JSON.stringify(retroEntries, null, 2));

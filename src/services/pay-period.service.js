@@ -1,7 +1,16 @@
-import prisma from "../databases/prisma.js";
-import { Prisma } from "../../prisma/generated/prisma/client.ts";
+import { Op } from "sequelize";
+
+import {
+    sequelize,
+    PayPeriod,
+    Payroll,
+    PayrollRelate,
+    TimeEntry,
+    Employee,
+    WageRate,
+    Position,
+} from "../database/index.js";
 import err from "../utils/error.js";
-import prismaSelectDefault from "../utils/prismaSelectDefault.js";
 import { toLocalDate } from "../utils/date.js";
 
 class PayPeriodService {
@@ -15,23 +24,20 @@ class PayPeriodService {
         if (employeeType) where.employeeType = employeeType;
         if (status) where.status = status;
 
-        const orderBy = {};
-        orderBy[sortBy] = sort;
+        const { rows, count: total } = await PayPeriod.findAndCountAll({
+            where,
+            offset: (page - 1) * limit,
+            limit,
+            order: [[sortBy, sort]],
+        });
 
-        const [data, total] = await Promise.all([
-            prisma.payPeriod.findMany({
-                where,
-                orderBy,
-                skip: (page - 1) * limit,
-                take: limit,
-                include: {
-                    _count: {
-                        select: { payrolls: true },
-                    },
-                },
-            }),
-            prisma.payPeriod.count({ where }),
-        ]);
+        // นับ payrolls ต่อ period — แทน _count { select: { payrolls: true } } ของ Prisma
+        const payrollCounts = await this._countPayrollsByPeriod(rows.map((p) => p.id));
+
+        const data = rows.map((p) => ({
+            ...p.toJSON(),
+            _count: { payrolls: payrollCounts.get(p.id) ?? 0 },
+        }));
 
         return {
             data,
@@ -45,57 +51,50 @@ class PayPeriodService {
     }
 
     async getPayPeriodById(id) {
-        const payPeriod = await prisma.payPeriod.findUnique({
-            where: { id },
-            include: {
-                payrolls: {
-                    where: { status: { not: 'CANCELLED' } },
-                    orderBy: { id: 'asc' },
-                    include: {
-                        employee: {
-                            select: {
-                                id: true,
-                                firstName: true,
-                                lastName: true,
-                                idCard: true,
-                                bankAccount: true,
-                                workLeader: {
-                                    select: {
-                                        branch: {
-                                            select: { name: true },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                        payrollRelates: {
+        const payPeriod = await PayPeriod.findByPk(id, {
+            include: [{
+                // Prisma include + where คืน parent เสมอแม้ไม่มี row ตรงเงื่อนไข
+                // → required: false (LEFT JOIN โดยเงื่อนไขอยู่ใน ON)
+                association: "payrolls",
+                where: { status: { [Op.ne]: "CANCELLED" } },
+                required: false,
+                include: [
+                    {
+                        association: "employee",
+                        attributes: ["id", "firstName", "lastName", "idCard", "bankAccount"],
+                        // ห้ามใช้ attributes: [] กับ include ระดับกลาง — Sequelize จะทิ้ง
+                        // object ทั้งอัน (รวม nested branch) ออกจากผลลัพธ์ ใส่ 'id' แทน
+                        include: {
+                            association: "workLeader",
+                            attributes: ["id"],
                             include: {
-                                timeEntry: {
-                                    select: {
-                                        id: true,
-                                        startTime: true,
-                                        endTime: true,
-                                        workType: true,
-                                        shiftType: true,
-                                        otRate: true,
-                                        isNegative: true,
-                                        isRetro: true,
-                                        paidValue: true,
-                                    },
-                                },
+                                association: "branch",
+                                attributes: ["name"],
                             },
                         },
                     },
-                },
-            },
+                    {
+                        association: "payrollRelates",
+                        include: {
+                            association: "timeEntry",
+                            attributes: [
+                                "id", "startTime", "endTime", "workType", "shiftType",
+                                "otRate", "isNegative", "isRetro", "paidValue",
+                            ],
+                        },
+                    },
+                ],
+            }],
+            order: [[{ model: Payroll, as: "payrolls" }, "id", "ASC"]],
         });
 
         if (!payPeriod) throw err.notFound({ id }, 'ไม่พบรอบจ่ายเงิน');
 
-        const employeeIds = payPeriod.payrolls.map(p => p.employeeId);
-        const wageRateMap = await this._getPrimaryWageRates(employeeIds, payPeriod.startDate);
+        const plain = payPeriod.toJSON();
+        const employeeIds = plain.payrolls.map((p) => p.employeeId);
+        const wageRateMap = await this._getPrimaryWageRates(employeeIds, plain.startDate);
 
-        const payrolls = payPeriod.payrolls.map(payroll => {
+        const payrolls = plain.payrolls.map((payroll) => {
             const wageRate = wageRateMap.get(payroll.employeeId)
                 ?? { dailyRate: 0, position: { code: null, name: null } };
             const summary = this._buildPayrollSummary(payroll, wageRate);
@@ -113,11 +112,11 @@ class PayPeriodService {
             };
         });
 
-        return { ...payPeriod, payrolls };
+        return { ...plain, payrolls };
     }
 
     async createPayPeriod({ periodNo, year, employeeType, startDate, endDate }) {
-        const existing = await prisma.payPeriod.findFirst({
+        const existing = await PayPeriod.findOne({
             where: { year, periodNo, employeeType },
         });
 
@@ -128,21 +127,19 @@ class PayPeriodService {
             );
         }
 
-        const payPeriod = await prisma.payPeriod.create({
-            data: {
-                periodNo,
-                year,
-                employeeType,
-                startDate: new Date(startDate),
-                endDate: new Date(endDate),
-            },
+        const payPeriod = await PayPeriod.create({
+            periodNo,
+            year,
+            employeeType,
+            startDate: new Date(startDate),
+            endDate: new Date(endDate),
         });
 
-        return payPeriod;
+        return payPeriod.toJSON();
     }
 
     async createPayrollsForPeriod(payPeriodId, { employeeId: targetEmployeeId } = {}) {
-        const payPeriod = await prisma.payPeriod.findUnique({ where: { id: payPeriodId } });
+        const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
         if (payPeriod.status !== 'OPEN') {
             throw err.badRequest(null, 'รอบจ่ายไม่อยู่ในสถานะเปิด ไม่สามารถสร้างรายการจ่ายได้');
@@ -152,11 +149,11 @@ class PayPeriodService {
 
         // ถ้าระบุ employeeId → ตรวจสอบว่ายังไม่มี payroll ของคนนี้ใน period นี้
         if (targetEmployeeId) {
-            const existing = await prisma.payroll.findFirst({
+            const existing = await Payroll.findOne({
                 where: {
                     payPeriodId,
                     employeeId: targetEmployeeId,
-                    status: { not: 'CANCELLED' },
+                    status: { [Op.ne]: 'CANCELLED' },
                 },
             });
             if (existing) {
@@ -169,95 +166,120 @@ class PayPeriodService {
 
         // 1. ดึง employeeIds ที่มี time entry ในช่วงเวลา
         // filter: TimeSheet = FILLED, TimeEntry = DRAFT, isNegative = false, isRetro = false
-        const entryWhere = {
-            timeSheet: { status: 'FILLED' },
-            status: 'DRAFT',
-            isNegative: false,
-            isRetro: false,
-            startTime: { gte: startDate, lte: endDate },
-        };
-
-        const employeesWithEntries = await prisma.timeEntry.findMany({
-            where: entryWhere,
-            select: { employeeId: true },
-            distinct: ['employeeId'],
+        // (แทน relation filter timeSheet: { status: 'FILLED' } ด้วย include.where + required
+        //  — INNER JOIN มีเงื่อนไขใน ON เทียบเท่า semantics ของ Prisma และไม่โดน trap
+        //  ของ nested where key '$alias.field$' ที่ underscored)
+        const employeesWithEntries = await TimeEntry.findAll({
+            where: {
+                status: 'DRAFT',
+                isNegative: false,
+                isRetro: false,
+                startTime: { [Op.gte]: startDate, [Op.lte]: endDate },
+            },
+            attributes: ['employeeId'],
+            // qualify ชื่อ table — time_sheets มี employee_id ด้วย ทำให้กำกววมถ้าไม่ระบุ
+            group: ['TimeEntry.employee_id'],
+            include: {
+                association: 'timeSheet',
+                attributes: [],
+                where: { status: 'FILLED' },
+                required: true,
+            },
         });
 
         if (employeesWithEntries.length === 0) {
             return { created: 0, skipped: 0, payrolls: [] };
         }
 
-        const candidateEmployeeIds = employeesWithEntries.map(e => e.employeeId);
+        const candidateEmployeeIds = employeesWithEntries.map((e) => e.employeeId);
 
         // 2. filter เฉพาะ employee ที่ตรงกับ employeeType
-        const employees = await prisma.employee.findMany({
+        // (แทน wageRates { some: { position: { employeeType } } } — ดึง position ids ก่อน
+        //  แล้วกรอง positionId IN (...) ตาม pattern ของ employee.service เพื่อเลี่ยง
+        //  nested include ที่มี where)
+        const positionRows = await Position.findAll({
+            where: { employeeType },
+            attributes: ['id'],
+        });
+
+        const employees = await Employee.findAll({
             where: {
                 id: {
-                    in: targetEmployeeId
-                        ? candidateEmployeeIds.filter(id => id === targetEmployeeId)
+                    [Op.in]: targetEmployeeId
+                        ? candidateEmployeeIds.filter((id) => id === targetEmployeeId)
                         : candidateEmployeeIds,
                 },
                 isActive: true,
-                wageRates: {
-                    some: {
-                        position: { employeeType },
-                        effectiveFrom: { lte: endDate },
-                        OR: [
-                            { effectiveTo: null },
-                            { effectiveTo: { gte: startDate } },
-                        ],
-                    },
+            },
+            attributes: ['id'],
+            include: {
+                association: 'wageRates',
+                attributes: [],
+                required: true,
+                where: {
+                    positionId: { [Op.in]: positionRows.map((p) => p.id) },
+                    effectiveFrom: { [Op.lte]: endDate },
+                    [Op.or]: [{ effectiveTo: null }, { effectiveTo: { [Op.gte]: startDate } }],
                 },
             },
-            select: { id: true },
         });
 
         if (employees.length === 0) {
             return { created: 0, skipped: 0, payrolls: [] };
         }
 
-        const validEmployeeIds = employees.map(e => e.id);
+        const validEmployeeIds = employees.map((e) => e.id);
 
         // 3. ดึง timeEntryIds ที่ linked อยู่แล้ว
-        const alreadyLinked = await prisma.payrollRelate.findMany({
-            where: {
-                timeEntry: {
-                    startTime: { gte: startDate, lte: endDate },
-                    employeeId: { in: validEmployeeIds },
+        const alreadyLinked = await PayrollRelate.findAll({
+            attributes: ['timeEntryId'],
+            include: {
+                association: 'timeEntry',
+                attributes: [],
+                where: {
+                    startTime: { [Op.gte]: startDate, [Op.lte]: endDate },
+                    employeeId: { [Op.in]: validEmployeeIds },
                 },
+                required: true,
             },
-            select: { timeEntryId: true },
         });
-        const linkedEntryIds = new Set(alreadyLinked.map(r => r.timeEntryId));
+        const linkedEntryIds = new Set(alreadyLinked.map((r) => r.timeEntryId));
 
         // 4. Transaction: สร้าง Payroll + PayrollRelate
-        const results = await prisma.$transaction(async (tx) => {
-            let seq = await tx.payroll.count({
+        const results = await sequelize.transaction(async (t) => {
+            let seq = await Payroll.count({
                 where: { payPeriodId },
+                transaction: t,
             });
 
             const createdPayrolls = [];
 
             for (const employeeId of validEmployeeIds) {
                 // ดึง time entries ที่ยังไม่ linked (FILLED + DRAFT only)
-                const timeEntries = await tx.timeEntry.findMany({
+                const timeEntries = await TimeEntry.findAll({
                     where: {
                         employeeId,
-                        timeSheet: { status: 'FILLED' },
                         status: 'DRAFT',
-                        startTime: { gte: startDate, lte: endDate },
+                        startTime: { [Op.gte]: startDate, [Op.lte]: endDate },
                         ...(linkedEntryIds.size > 0 && {
-                            id: { notIn: Array.from(linkedEntryIds) },
+                            id: { [Op.notIn]: Array.from(linkedEntryIds) },
                         }),
                     },
-                    orderBy: { startTime: 'asc' },
+                    include: {
+                        association: 'timeSheet',
+                        attributes: [],
+                        where: { status: 'FILLED' },
+                        required: true,
+                    },
+                    order: [['startTime', 'ASC']],
+                    transaction: t,
                 });
 
                 if (timeEntries.length === 0) continue;
 
                 // ดึง wage rates
                 const wageRatesByDate = await this._getWageRatesByDate(
-                    employeeId, startDate, endDate, tx,
+                    employeeId, startDate, endDate, t,
                 );
 
                 // คำนวณ paidValue
@@ -265,44 +287,35 @@ class PayPeriodService {
 
                 // บันทึก paidValue ลง time entry (bulk update)
                 if (entryAmounts.length > 0) {
-                    await tx.$executeRaw`
-                        UPDATE time_entries
-                        SET paid_value = data.paid_value::numeric
-                        FROM (VALUES ${Prisma.join(
-                            entryAmounts.map(e => Prisma.sql`(${e.id}, ${e.paidValue})`)
-                        )}) AS data(id, paid_value)
-                        WHERE time_entries.id = data.id::integer
-                    `;
+                    await this._bulkUpdatePaidValue(entryAmounts, t);
                 }
 
                 // ปรับ time entry status → LOCKED
-                const entryIds = timeEntries.map(e => e.id);
-                await tx.timeEntry.updateMany({
-                    where: { id: { in: entryIds } },
-                    data: { status: 'LOCKED' },
-                });
+                const entryIds = timeEntries.map((e) => e.id);
+                await TimeEntry.update(
+                    { status: 'LOCKED' },
+                    { where: { id: { [Op.in]: entryIds } }, transaction: t },
+                );
 
                 seq++;
                 const payRef = this._generatePayRef(payPeriod.year, payPeriod.periodNo, seq);
 
-                const payroll = await tx.payroll.create({
-                    data: {
-                        payRef,
-                        employeeId,
-                        payPeriodId,
-                    },
-                });
+                const payroll = await Payroll.create({
+                    payRef,
+                    employeeId,
+                    payPeriodId,
+                }, { transaction: t });
 
                 // สร้าง PayrollRelate
-                const relateData = timeEntries.map(entry => ({
+                const relateData = timeEntries.map((entry) => ({
                     payrollId: payroll.id,
                     timeEntryId: entry.id,
                 }));
 
-                await tx.payrollRelate.createMany({ data: relateData });
+                await PayrollRelate.bulkCreate(relateData, { transaction: t });
 
                 createdPayrolls.push({
-                    ...payroll,
+                    ...payroll.toJSON(),
                     entryCount: timeEntries.length,
                 });
             }
@@ -318,72 +331,71 @@ class PayPeriodService {
     }
 
     async cancelAllPayrolls(payPeriodId) {
-        const payPeriod = await prisma.payPeriod.findUnique({ where: { id: payPeriodId } });
+        const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
         if (payPeriod.status !== 'OPEN') {
             throw err.badRequest(null, 'รอบจ่ายไม่อยู่ในสถานะเปิด ไม่สามารถยกเลิกได้');
         }
 
-        const payrolls = await prisma.payroll.findMany({
+        const payrolls = await Payroll.findAll({
             where: {
                 payPeriodId,
-                status: { in: ['PENDING', 'CALCULATED'] },
+                status: { [Op.in]: ['PENDING', 'CALCULATED'] },
             },
-            select: { id: true },
+            attributes: ['id'],
         });
 
         if (payrolls.length === 0) {
             return { cancelled: 0, message: 'ไม่มีรายการจ่ายเงินที่สามารถยกเลิกได้' };
         }
 
-        const payrollIds = payrolls.map(p => p.id);
+        const payrollIds = payrolls.map((p) => p.id);
 
-        await prisma.$transaction(async (tx) => {
+        await sequelize.transaction(async (t) => {
             // ดึง timeEntryIds ที่เกี่ยวข้องกับ payrolls เหล่านี้
-            const relates = await tx.payrollRelate.findMany({
-                where: { payrollId: { in: payrollIds } },
-                select: { timeEntryId: true },
+            const relates = await PayrollRelate.findAll({
+                where: { payrollId: { [Op.in]: payrollIds } },
+                attributes: ['timeEntryId'],
+                transaction: t,
             });
 
             if (relates.length > 0) {
-                const entryIds = relates.map(r => r.timeEntryId);
+                const entryIds = relates.map((r) => r.timeEntryId);
 
                 // ลบ relates
-                await tx.payrollRelate.deleteMany({
-                    where: { payrollId: { in: payrollIds } },
+                await PayrollRelate.destroy({
+                    where: { payrollId: { [Op.in]: payrollIds } },
+                    transaction: t,
                 });
 
                 // คืนสถานะ time entry → DRAFT, paidValue = null
-                await tx.timeEntry.updateMany({
-                    where: { id: { in: entryIds } },
-                    data: { status: 'DRAFT', paidValue: null },
-                });
+                await TimeEntry.update(
+                    { status: 'DRAFT', paidValue: null },
+                    { where: { id: { [Op.in]: entryIds } }, transaction: t },
+                );
             }
 
             // ยกเลิก payroll ทั้งหมด
-            await tx.payroll.updateMany({
-                where: { id: { in: payrollIds } },
-                data: { status: 'CANCELLED' },
-            });
+            await Payroll.update(
+                { status: 'CANCELLED' },
+                { where: { id: { [Op.in]: payrollIds } }, transaction: t },
+            );
         });
 
         return { cancelled: payrollIds.length, message: `ยกเลิกรายการจ่ายเงิน ${payrollIds.length} รายการสำเร็จ` };
     }
 
     async recalculatePayPeriod(payPeriodId) {
-        const payPeriod = await prisma.payPeriod.findUnique({ where: { id: payPeriodId } });
+        const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
 
         const { startDate, endDate } = payPeriod;
 
         // ดึง payrolls ที่ยังไม่ PAID และไม่ CANCELLED
-        const payrolls = await prisma.payroll.findMany({
+        const payrolls = await Payroll.findAll({
             where: {
                 payPeriodId,
-                status: { in: ['PENDING', 'CALCULATED'] },
-            },
-            include: {
-                _count: { select: { payrollRelates: true } },
+                status: { [Op.in]: ['PENDING', 'CALCULATED'] },
             },
         });
 
@@ -391,55 +403,56 @@ class PayPeriodService {
             return { updated: 0, payrolls: [] };
         }
 
-        const results = await prisma.$transaction(async (tx) => {
+        const results = await sequelize.transaction(async (t) => {
             const updated = [];
 
             for (const payroll of payrolls) {
                 // ดึง time entries ที่เกี่ยวข้องทั้งหมดในช่วงเวลา (รวม negative และ retro)
-                const timeEntries = await tx.timeEntry.findMany({
+                const timeEntries = await TimeEntry.findAll({
                     where: {
                         employeeId: payroll.employeeId,
-                        timeSheet: { status: 'FILLED' },
-                        startTime: { gte: startDate, lte: endDate },
+                        startTime: { [Op.gte]: startDate, [Op.lte]: endDate },
                     },
-                    orderBy: { startTime: 'asc' },
+                    include: {
+                        association: 'timeSheet',
+                        attributes: [],
+                        where: { status: 'FILLED' },
+                        required: true,
+                    },
+                    order: [['startTime', 'ASC']],
+                    transaction: t,
                 });
 
                 // ตรวจสอบ time entries ใหม่ที่ยังไม่ linked
-                const existingRelates = await tx.payrollRelate.findMany({
+                const existingRelates = await PayrollRelate.findAll({
                     where: { payrollId: payroll.id },
-                    select: { timeEntryId: true },
+                    attributes: ['timeEntryId'],
+                    transaction: t,
                 });
-                const linkedIds = new Set(existingRelates.map(r => r.timeEntryId));
+                const linkedIds = new Set(existingRelates.map((r) => r.timeEntryId));
 
-                const newEntries = timeEntries.filter(e => !linkedIds.has(e.id));
+                const newEntries = timeEntries.filter((e) => !linkedIds.has(e.id));
 
                 // เพิ่ม relate ใหม่
                 if (newEntries.length > 0) {
-                    await tx.payrollRelate.createMany({
-                        data: newEntries.map(entry => ({
+                    await PayrollRelate.bulkCreate(
+                        newEntries.map((entry) => ({
                             payrollId: payroll.id,
                             timeEntryId: entry.id,
                         })),
-                    });
+                        { transaction: t },
+                    );
                 }
 
                 // คำนวณ paidValue ใหม่จากทุก entry (รวมเก่า + ใหม่)
                 const wageRatesByDate = await this._getWageRatesByDate(
-                    payroll.employeeId, startDate, endDate, tx,
+                    payroll.employeeId, startDate, endDate, t,
                 );
                 const entryAmounts = this._calculatePayrollAmounts(timeEntries, wageRatesByDate);
 
                 // อัปเดต paidValue ลง time entry (bulk update)
                 if (entryAmounts.length > 0) {
-                    await tx.$executeRaw`
-                        UPDATE time_entries
-                        SET paid_value = data.paid_value::numeric
-                        FROM (VALUES ${Prisma.join(
-                            entryAmounts.map(e => Prisma.sql`(${e.id}, ${e.paidValue})`)
-                        )}) AS data(id, paid_value)
-                        WHERE time_entries.id = data.id::integer
-                    `;
+                    await this._bulkUpdatePaidValue(entryAmounts, t);
                 }
 
                 updated.push({
@@ -456,20 +469,19 @@ class PayPeriodService {
     }
 
     async reopenPayPeriod(payPeriodId) {
-        const payPeriod = await prisma.payPeriod.findUnique({ where: { id: payPeriodId } });
+        const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
         if (payPeriod.status !== 'CLOSED') {
             throw err.badRequest(null, 'รอบจ่ายไม่อยู่ในสถานะปิด ไม่สามารถเปิดใหม่ได้');
         }
 
-        return await prisma.payPeriod.update({
-            where: { id: payPeriodId },
-            data: { status: 'OPEN' },
-        });
+        await payPeriod.update({ status: 'OPEN' });
+
+        return payPeriod.toJSON();
     }
 
     async exportPayPeriod(payPeriodId) {
-        const payPeriod = await prisma.payPeriod.findUnique({ where: { id: payPeriodId } });
+        const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
         if (payPeriod.status !== 'OPEN') {
             throw err.badRequest(null, 'รอบจ่ายไม่อยู่ในสถานะเปิด');
@@ -478,28 +490,25 @@ class PayPeriodService {
         // //TODO - Generate Excel file
         // const buffer = await this._generateExcelFile(payPeriodId);
 
-        const { count } = await prisma.payroll.updateMany({
-            where: {
-                payPeriodId,
-                status: 'PENDING',
-            },
-            data: { status: 'CALCULATED' },
-        });
+        const [updatedCount] = await Payroll.update(
+            { status: 'CALCULATED' },
+            { where: { payPeriodId, status: 'PENDING' } },
+        );
 
         return {
             message: 'Export successful (TODO: Excel generation)',
-            data: { updatedCount: count },
+            data: { updatedCount },
         };
     }
 
     async closePayPeriod(payPeriodId, { force = false } = {}) {
-        const payPeriod = await prisma.payPeriod.findUnique({ where: { id: payPeriodId } });
+        const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
         if (payPeriod.status !== 'OPEN') {
             throw err.badRequest(null, 'รอบจ่ายไม่อยู่ในสถานะเปิด ไม่สามารถปิดได้');
         }
 
-        const pendingCount = await prisma.payroll.count({
+        const pendingCount = await Payroll.count({
             where: { payPeriodId, status: 'PENDING' },
         });
 
@@ -510,22 +519,19 @@ class PayPeriodService {
             );
         }
 
-        const updated = await prisma.payPeriod.update({
-            where: { id: payPeriodId },
-            data: { status: 'CLOSED' },
-        });
+        await payPeriod.update({ status: 'CLOSED' });
 
         return {
             message: pendingCount > 0
                 ? `ปิดรอบจ่ายสำเร็จ (มีรายการ PENDING ที่ถูกข้าม ${pendingCount} รายการ)`
                 : 'ปิดรอบจ่ายสำเร็จ',
-            data: updated,
+            data: payPeriod.toJSON(),
         };
     }
 
     // //TODO - Parse bank file and update payroll status to PAID
     async importBankFile(payPeriodId) {
-        const payPeriod = await prisma.payPeriod.findUnique({ where: { id: payPeriodId } });
+        const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
         if (payPeriod.status === 'CLOSED') {
             throw err.badRequest(null, 'รอบจ่ายปิดแล้ว ไม่สามารถนำเข้าไฟล์ธนาคารได้');
@@ -535,6 +541,65 @@ class PayPeriodService {
     }
 
     // ─── Private Helpers ───────────────────────────────────────
+
+    /**
+     * Bulk update paidValue ของ time entries หลายแถวใน query เดียว
+     * ทดแทน Prisma $executeRaw (PG: UPDATE ... FROM (VALUES ...))
+     * ด้วยไวยากรณ์ MySQL: CASE WHEN + IN
+     * @param {Array<{id: number, paidValue: number}>} entryAmounts
+     * @param {Object|null} t - Sequelize transaction
+     */
+    async _bulkUpdatePaidValue(entryAmounts, t = null) {
+        if (!entryAmounts || entryAmounts.length === 0) return;
+
+        const replacements = { ids: entryAmounts.map((e) => e.id) };
+        const branches = entryAmounts.map((e, i) => {
+            replacements[`id${i}`] = e.id;
+            replacements[`pv${i}`] = e.paidValue;
+            return `WHEN :id${i} THEN :pv${i}`;
+        });
+
+        await sequelize.query(
+            `UPDATE time_entries
+             SET paid_value = CASE id ${branches.join(' ')} ELSE paid_value END
+             WHERE id IN (:ids)`,
+            {
+                replacements,
+                ...(t ? { transaction: t } : {}),
+            },
+        );
+    }
+
+    /**
+     * นับ payrolls แยกตาม payPeriodId
+     * (ทดแทน _count { select: { payrolls: true } } ของ Prisma)
+     * @param {number[]} payPeriodIds
+     * @returns {Promise<Map<number, number>>}
+     */
+    async _countPayrollsByPeriod(payPeriodIds) {
+        const counts = new Map();
+        if (!payPeriodIds || payPeriodIds.length === 0) {
+            return counts;
+        }
+
+        const rows = await Payroll.findAll({
+            where: { payPeriodId: { [Op.in]: payPeriodIds } },
+            attributes: [
+                'payPeriodId',
+                [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+            ],
+            group: ['pay_period_id'],
+            raw: true,
+        });
+
+        for (const row of rows) {
+            // raw: true คืน key เป็นชื่อคอลัมน์ได้ — รองรับทั้งสองแบบกันเหนียว
+            const periodId = Number(row.payPeriodId ?? row.pay_period_id);
+            counts.set(periodId, Number(row.count));
+        }
+
+        return counts;
+    }
 
     _calculatePayrollAmounts(timeEntries, wageRatesByDate) {
         const entryAmounts = [];
@@ -616,25 +681,22 @@ class PayPeriodService {
         return 0;
     }
 
-    async _getWageRatesByDate(employeeId, startDate, endDate, tx = prisma) {
-        const wageRates = await tx.wageRate.findMany({
+    async _getWageRatesByDate(employeeId, startDate, endDate, tx = null) {
+        const wageRates = await WageRate.findAll({
             where: {
                 employeeId,
-                effectiveFrom: { lte: endDate },
-                OR: [
+                effectiveFrom: { [Op.lte]: endDate },
+                [Op.or]: [
                     { effectiveTo: null },
-                    { effectiveTo: { gte: startDate } },
+                    { effectiveTo: { [Op.gte]: startDate } },
                 ],
             },
-            select: {
-                dailyRate: true,
-                hourlyRate: true,
-                minuteRate: true,
-                monthlyRate: true,
-                effectiveFrom: true,
-                effectiveTo: true,
-            },
-            orderBy: { effectiveFrom: 'asc' },
+            attributes: [
+                'dailyRate', 'hourlyRate', 'minuteRate', 'monthlyRate',
+                'effectiveFrom', 'effectiveTo',
+            ],
+            order: [['effectiveFrom', 'ASC']],
+            ...(tx ? { transaction: tx } : {}),
         });
 
         const rateMap = new Map();
@@ -656,7 +718,7 @@ class PayPeriodService {
     }
 
     _buildPayrollSummary(payroll, dailyRate) {
-        const entries = payroll.payrollRelates.map(r => r.timeEntry);
+        const entries = payroll.payrollRelates.map((r) => r.timeEntry);
 
         let regularAmount = 0;
         let otAmount = 0;
@@ -740,33 +802,37 @@ class PayPeriodService {
     async _getPrimaryWageRates(employeeIds, periodStartDate) {
         if (employeeIds.length === 0) return new Map();
 
-        const wageRates = await prisma.wageRate.findMany({
+        const wageRates = await WageRate.findAll({
             where: {
-                employeeId: { in: employeeIds },
-                effectiveFrom: { lte: periodStartDate },
-                OR: [
+                employeeId: { [Op.in]: employeeIds },
+                effectiveFrom: { [Op.lte]: periodStartDate },
+                [Op.or]: [
                     { effectiveTo: null },
-                    { effectiveTo: { gte: periodStartDate } },
+                    { effectiveTo: { [Op.gte]: periodStartDate } },
                 ],
             },
-            select: {
-                employeeId: true,
-                dailyRate: true,
-                monthlyRate: true,
-                position: { select: { name: true, code: true } },
+            attributes: ['employeeId', 'dailyRate', 'monthlyRate'],
+            include: {
+                association: 'position',
+                attributes: ['name', 'code'],
             },
-            orderBy: [
-                { employeeId: 'asc' },
-                { effectiveFrom: 'desc' },
+            order: [
+                ['employeeId', 'ASC'],
+                ['effectiveFrom', 'DESC'],
             ],
         });
 
         const rateMap = new Map();
         for (const rate of wageRates) {
             if (!rateMap.has(rate.employeeId)) {
+                // rebuild position เป็น { name, code } เฉพาะ (Sequelize เติม PK ของ
+                // include ให้เอง — ตัดออกเพื่อคงรูปร่างเหมือน select เดิมของ Prisma)
                 rateMap.set(rate.employeeId, {
                     dailyRate: Number(rate.dailyRate),
-                    position: rate.position,
+                    position: {
+                        name: rate.position.name,
+                        code: rate.position.code,
+                    },
                 });
             }
         }

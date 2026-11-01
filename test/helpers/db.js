@@ -1,4 +1,4 @@
-import prisma from '../../src/databases/prisma.js';
+import { sequelize } from '../../src/database/index.js';
 
 const TABLES = [
     'payroll_relates',
@@ -21,12 +21,21 @@ const TABLES = [
     'bill_rates',
 ];
 
+/**
+ * ล้างข้อมูลทั้งหมดใน MySQL test DB + reset auto increment
+ */
 export async function cleanDatabase() {
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
     for (const table of TABLES) {
-        await prisma.$executeRawUnsafe(`DELETE FROM "${table}" CASCADE`);
+        await sequelize.query(`DELETE FROM ${table}`);
+    }
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
+    for (const table of TABLES) {
+        await sequelize.query(`ALTER TABLE ${table} AUTO_INCREMENT = 1`);
     }
 }
 
 export async function disconnectPrisma() {
-    await prisma.$disconnect();
+    // ชื่อเดิมสมัย Prisma — ตอนนี้ปิด connection Sequelize
+    await sequelize.close();
 }
