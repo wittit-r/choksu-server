@@ -1,4 +1,5 @@
 import { sequelize } from '../../src/database/index.js';
+import { testServer } from './client.js';
 
 const TABLES = [
     'payroll_relates',
@@ -36,6 +37,7 @@ export async function cleanDatabase() {
 }
 
 export async function disconnectPrisma() {
-    // ชื่อเดิมสมัย Prisma — ตอนนี้ปิด connection Sequelize
+    // ชื่อเดิมสมัย Prisma — ตอนนี้ปิดทั้ง Sequelize และ test server
     await sequelize.close();
+    await new Promise((resolve) => testServer.close(resolve));
 }

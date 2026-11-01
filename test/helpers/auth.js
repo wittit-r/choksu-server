@@ -4,16 +4,17 @@ import { hashPassword } from '../../src/utils/password.js';
 
 /**
  * สร้าง user + session ทดสอบลง MySQL test DB
+ * @param {string} role - default 'ACCOUNTING' (ใช้ 'SUPER_ADMIN' เมื่อ test authorize gates)
  */
-export async function createTestAuth() {
+export async function createTestAuth(role = 'ACCOUNTING') {
     const passwordHash = await hashPassword('test1234');
 
     const user = await User.create({
-        username: 'test-accounting',
+        username: `test-${role.toLowerCase()}-${Date.now()}`,
         firstName: 'Test',
-        lastName: 'Accounting',
+        lastName: role.charAt(0) + role.slice(1).toLowerCase(),
         passwordHash,
-        role: 'ACCOUNTING',
+        role,
         isActive: true,
         isDeleted: false,
     });
