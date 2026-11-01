@@ -3,7 +3,7 @@ import { cleanDatabase, disconnectPrisma } from '../helpers/db.js';
 import { createTestAuth } from '../helpers/auth.js';
 import { seedTestData } from '../helpers/seed.js';
 import { createApiClient } from '../helpers/client.js';
-import prisma from '../../src/databases/prisma.js';
+import { Position, Employee, WageRate } from '../../src/database/index.js';
 import IORedis from 'ioredis';
 
 // Flow: คนขับรถ — ใบลงเวลารายเดือน (MONTHLY) → FILLED → สร้างรอบจ่ายประเภท DRIVER → ยอดถูกต้อง
@@ -24,37 +24,30 @@ describe('Flow: Driver — ลงเวลารายเดือนและ�
         seed = await seedTestData();
 
         // เตรียมข้อมูลฝั่ง DRIVER (seed หลักมีแต่ WORKER)
-        const driverPosition = await prisma.position.create({
-            data: {
-                name: 'Test Driver',
-                code: 'TD',
-                employeeType: 'DRIVER',
-                isActive: true,
-            },
+        const driverPosition = await Position.create({
+            name: 'Test Driver',
+            code: 'TD',
+            employeeType: 'DRIVER',
+            isActive: true,
         });
-        const driverEmployee = await prisma.employee.create({
-            data: {
-                firstName: 'DRIVER',
-                lastName: 'TEST',
-                idCard: '9999999999999',
-                bankAccount: '9999999999',
-                shiftType: 'REGULAR',
-                workLeaderId: seed.workLeader.id,
-                startDate: new Date('2026-01-01'),
-                isActive: true,
-            },
+        const driverEmployee = await Employee.create({
+            firstName: 'DRIVER',
+            lastName: 'TEST',
+            idCard: '9999999999999',
+            bankAccount: '9999999999',
+            shiftType: 'REGULAR',
+            workLeaderId: seed.workLeader.id,
+            startDate: new Date('2026-01-01'),
+            isActive: true,
         });
-        await prisma.wageRate.create({
-            data: {
-                employeeId: driverEmployee.id,
-                positionId: driverPosition.id,
-                dailyRate: 500,
-                hourlyRate: 62.5,
-                minuteRate: 1.042,
-                monthlyRate: 0,
-                effectiveFrom: new Date('2026-01-01'),
-                effectiveTo: null,
-            },
+        await WageRate.create({
+            employeeId: driverEmployee.id,
+            positionId: driverPosition.id,
+            dailyRate: 500,
+            hourlyRate: 62.5,
+            minuteRate: 1.042,
+            monthlyRate: 0,
+            effectiveFrom: new Date('2026-01-01'),
         });
         driver = { position: driverPosition, employee: driverEmployee };
     });

@@ -1,35 +1,7 @@
-import prisma from "../databases/prisma.js";
-import prismaSelectDefault from "../utils/prismaSelectDefault.js";
+import { Op } from "sequelize";
+
+import { Position } from "../database/index.js";
 import err from "../utils/error.js";
-
-/**
- * @typedef {Object} PaginationResult
- * @property {Array} data - ข้อมูลที่ดึงมา
- * @property {Object} pagination - ข้อมูล pagination
- * @property {number} pagination.page - หน้าปัจจุบัน
- * @property {number} pagination.limit - จำนวนรายการต่อหน้า
- * @property {number} pagination.total - จำนวนรายการทั้งหมด
- * @property {number} pagination.totalPages - จำนวนหน้าทั้งหมด
- */
-
-/**
- * @typedef {Object} Position
- * @property {string} id - Position ID (UUID)
- * @property {string} name - ชื่อตำแหน่งงาน
- * @property {string} code - รหัสตำแหน่งงาน
- * @property {string} employeeType - ประเภทพนักงาน (GENERAL, DRIVER, AGENT, ACCOUNTANT)
- * @property {boolean} isActive - สถานะการใช้งาน
- * @property {Date} createdAt - วันที่สร้าง
- * @property {Date} updatedAt - วันที่อัปเดต
- */
-
-/**
- * @typedef {Object} PositionData
- * @property {string} name - ชื่อตำแหน่งงาน
- * @property {string} code - รหัสตำแหน่งงาน
- * @property {string} employeeType - ประเภทพนักงาน
- * @property {boolean} [isActive=true] - สถานะการใช้งาน
- */
 
 /**
  * Service สำหรับจัดการข้อมูลตำแหน่งงาน
@@ -43,7 +15,6 @@ class PositionService {
      * @param {'asc'|'desc'} params.sort - ทิศทางการเรียงลำดับ
      * @param {string} params.sortBy - ฟิลด์ที่ใช้เรียงลำดับ
      * @param {string} [params.search] - คำค้นหา (ค้นหาใน name, code)
-     * @param {boolean} [params.isActive] - กรองตามสถานะการใช้งาน
      * @param {string} [params.employeeType] - กรองตามประเภทพนักงาน
      * @returns {Promise<PaginationResult>} รายการตำแหน่งงานพร้อม pagination
      */
@@ -51,34 +22,22 @@ class PositionService {
         const where = {};
 
         if (query.search) {
-            where.OR = [
-                { name: { contains: query.search, mode: 'insensitive' } },
-                { code: { contains: query.search, mode: 'insensitive' } },
+            where[Op.or] = [
+                { name: { [Op.like]: `%${query.search}%` } },
+                { code: { [Op.like]: `%${query.search}%` } },
             ];
         }
 
-        if (query.isActive !== undefined) {
-            where.isActive = query.isActive;
-        }
-
-        if (query.employeeType !== undefined) {
+        if (query.employeeType) {
             where.employeeType = query.employeeType;
         }
 
-        const [positions, total] = await Promise.all([
-            prisma.position.findMany({
-                where,
-                select: prismaSelectDefault.position,
-                skip: (page - 1) * limit,
-                take: limit,
-                orderBy: {
-                    [sortBy]: sort,
-                },
-            }),
-            prisma.position.count({
-                where,
-            }),
-        ]);
+        const { rows: positions, count: total } = await Position.findAndCountAll({
+            where,
+            offset: (page - 1) * limit,
+            limit,
+            order: [[sortBy, sort]],
+        });
 
         return {
             data: positions,
@@ -99,10 +58,7 @@ class PositionService {
      * @throws {AppError} ไม่พบตำแหน่งงาน (notFound)
      */
     async getPositionById({ id }) {
-        const position = await prisma.position.findUnique({
-            where: { id },
-            select: prismaSelectDefault.position,
-        });
+        const position = await Position.findByPk(id);
 
         if (!position) {
             throw err.notFound({ id });
@@ -117,47 +73,35 @@ class PositionService {
      * @returns {Promise<Position>} ข้อมูลตำแหน่งงานที่สร้างใหม่
      */
     async createPosition(data) {
-        const position = await prisma.position.create({
-            data: {
-                name: data.name,
-                code: data.code,
-                employeeType: data.employeeType,
-                isActive: data.isActive ?? true,
-            },
-            select: prismaSelectDefault.position,
+        return Position.create({
+            name: data.name,
+            code: data.code,
+            employeeType: data.employeeType,
+            isActive: data.isActive ?? true,
         });
-
-        return position;
     }
 
     /**
      * อัปเดตข้อมูลตำแหน่งงาน
-     * @param {string} id - Position ID (UUID)
+     * @param {number} id - Position ID
      * @param {PositionData} data - ข้อมูลที่จะอัปเดต
      * @returns {Promise<Position>} ข้อมูลตำแหน่งงานที่อัปเดตแล้ว
      * @throws {AppError} ไม่พบตำแหน่งงาน (notFound)
      */
     async updatePosition(id, data) {
-        const position = await prisma.position.findUnique({
-            where: { id },
-        });
+        const position = await Position.findByPk(id);
 
         if (!position) {
             throw err.notFound({ id });
         }
 
-        const updated = await prisma.position.update({
-            where: { id },
-            data: {
-                name: data.name,
-                code: data.code,
-                employeeType: data.employeeType,
-                isActive: data.isActive,
-            },
-            select: prismaSelectDefault.position,
-        });
+        position.name = data.name;
+        position.code = data.code;
+        position.employeeType = data.employeeType;
+        position.isActive = data.isActive;
+        await position.save();
 
-        return updated;
+        return position;
     }
 }
 

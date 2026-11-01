@@ -3,7 +3,7 @@ import { cleanDatabase, disconnectPrisma } from '../helpers/db.js';
 import { createTestAuth } from '../helpers/auth.js';
 import { seedTestData } from '../helpers/seed.js';
 import { createApiClient } from '../helpers/client.js';
-import prisma from '../../src/databases/prisma.js';
+import { TimeEntry } from '../../src/database/index.js';
 import IORedis from 'ioredis';
 
 // กะตาม model ของระบบ: ดึก 00:00-08:00 / เช้า 08:00-16:00 / บ่าย 16:00-24:00
@@ -105,13 +105,13 @@ describe('Edge: กะ (SHIFT) รวมถึงช่วง 24:00', () => {
         await api.createPayrolls(periodId);
 
         // จำลอง "แก้ DB ตรงๆ" เป็นกะข้ามวัน 22:00 → 06:00 (digits วันเดียวกัน → ติดลบ)
-        await prisma.timeEntry.updateMany({
-            where: { employeeId: seed.employees[0].id },
-            data: {
+        await TimeEntry.update(
+            {
                 startTime: new Date('2026-11-02T22:00:00Z'),
                 endTime: new Date('2026-11-02T06:00:00Z'),
             },
-        });
+            { where: { employeeId: seed.employees[0].id } },
+        );
 
         const recalcRes = await api.recalculatePeriod(periodId);
         expect(recalcRes.status).toBe(200);

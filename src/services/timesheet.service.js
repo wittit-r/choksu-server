@@ -1,7 +1,8 @@
-import prisma from "../databases/prisma.js";
+import { Op } from "sequelize";
+
+import { sequelize, WorkLeader, Employee, TimeSheet, TimeEntry } from "../database/index.js";
 import err from "../utils/error.js";
 import { combineDateAndTime, toLocalDate, toLocalTime } from "../utils/date.js";
-import prismaSelectDefault from "../utils/prismaSelectDefault.js";
 
 /**
  * @typedef {Object} TimeSheet
@@ -22,6 +23,98 @@ class TimeSheetService {
     // ============================================
     // Private Helper Methods
     // ============================================
+
+    /**
+     * เลือก field ของ TimeSheet ตาม select เดิม (prismaSelectDefault.timeSheet)
+     * — คงรูปร่าง response เหมือนตอนเป็น Prisma
+     * @param {Object} timeSheet - TimeSheet instance หรือ plain object
+     * @returns {Object} เฉพาะ field ที่ select ไว้เดิม
+     */
+    _pickTimeSheetFields(timeSheet) {
+        return {
+            id: timeSheet.id,
+            sheetType: timeSheet.sheetType,
+            workDate: timeSheet.workDate,
+            monthPeriod: timeSheet.monthPeriod,
+            status: timeSheet.status,
+            files: timeSheet.files,
+        };
+    }
+
+    /**
+     * เลือก field ของ TimeEntry ตาม select เดิม (prismaSelectDefault.timeEntry)
+     * @param {Object} entry - TimeEntry instance หรือ plain object
+     * @returns {Object} เฉพาะ field ที่ select ไว้เดิม
+     */
+    _pickTimeEntryFields(entry) {
+        return {
+            id: entry.id,
+            employeeId: entry.employeeId,
+            startTime: entry.startTime,
+            endTime: entry.endTime,
+            shiftType: entry.shiftType,
+            workType: entry.workType,
+            status: entry.status,
+            otRate: entry.otRate,
+            accommodation: entry.accommodation,
+            note: entry.note,
+            isNegative: entry.isNegative,
+            isRetro: entry.isRetro,
+            paidValue: entry.paidValue,
+            paidDate: entry.paidDate,
+            referenceEntryId: entry.referenceEntryId,
+        };
+    }
+
+    /**
+     * แปลง TimeEntry เป็น plain object พร้อมแนบข้อมูลพนักงาน
+     * (ตาม select เดิมของ Prisma ที่รวม employee: { id, firstName, lastName })
+     * @param {Object} entry - TimeEntry instance
+     * @param {Object|null} employee - Employee instance ที่ดึง id/firstName/lastName ไว้
+     * @returns {Object} TimeEntry fields + employee
+     */
+    _entryWithEmployee(entry, employee) {
+        return {
+            ...this._pickTimeEntryFields(entry),
+            employee: employee
+                ? { id: employee.id, firstName: employee.firstName, lastName: employee.lastName }
+                : null,
+        };
+    }
+
+    /**
+     * นับ TimeEntry ที่ isNegative = false แยกตาม timeSheetId
+     * (ทดแทน _count.timeEntries { where: { isNegative: false } } ของ Prisma)
+     * @param {number[]} timeSheetIds - รายการ TimeSheet ID
+     * @returns {Promise<Map<number, number>>} Map timeSheetId → จำนวน entries
+     */
+    async _countPositiveEntries(timeSheetIds) {
+        const counts = new Map();
+        if (!timeSheetIds || timeSheetIds.length === 0) {
+            return counts;
+        }
+
+        const rows = await TimeEntry.findAll({
+            where: {
+                timeSheetId: { [Op.in]: timeSheetIds },
+                isNegative: false,
+            },
+            attributes: [
+                'timeSheetId',
+                [sequelize.fn('COUNT', sequelize.col('id')), 'entryCount'],
+            ],
+            group: ['time_sheet_id'],
+            raw: true,
+        });
+
+        for (const row of rows) {
+            // raw: true คืน key เป็นชื่อคอลัมน์ (time_sheet_id) — รองรับทั้งสองแบบไว้กันขอบ
+            const sheetId = Number(row.timeSheetId ?? row.time_sheet_id);
+            counts.set(sheetId, Number(row.entryCount));
+        }
+
+        return counts;
+    }
 
     /**
      * ตรวจสอบกฎของ workType
@@ -111,11 +204,10 @@ class TimeSheetService {
      * ตรวจสอบว่าไม่มีเวลาทับซ้อนกับ TimeEntry ที่มีอยู่ (Single Query Version)
      * @param {Array} entries - entries ที่มี startTime, endTime, employeeId, timeIn, timeOut แล้ว
      * @param {Array} excludeEntryIds - ID ของ entries ที่จะยกเว้น (สำหรับ update)
-     * @param {Object} tx - Prisma transaction client (optional)
+     * @param {Object} tx - Sequelize transaction (optional)
      * @throws {HttpError} ถ้ามีการทับซ้อน (รวมรายการที่ซ้ำทั้งหมด)
      */
     async _validateNoOverlaps(entries, excludeEntryIds = [], tx = null) {
-        const client = tx || prisma;
         const conflicts = [];
 
         // Group entries by employee
@@ -162,32 +254,26 @@ class TimeSheetService {
         const globalMaxTime = new Date(Math.max(...allTimes));
 
         const whereClause = {
-            employeeId: { in: allEmployeeIds },
-            workType: { in: ['REGULAR', 'OVERTIME'] },
-            AND: [
-                { startTime: { lt: globalMaxTime } },
-                { endTime: { gt: globalMinTime } },
-            ],
+            employeeId: { [Op.in]: allEmployeeIds },
+            workType: { [Op.in]: ['REGULAR', 'OVERTIME'] },
+            // AND ของ Prisma = แต่ละ key ใน where object ถูก AND กันอยู่แล้ว
+            startTime: { [Op.lt]: globalMaxTime },
+            endTime: { [Op.gt]: globalMinTime },
         };
 
         if (excludeEntryIds.length > 0) {
-            whereClause.id = { notIn: excludeEntryIds };
+            whereClause.id = { [Op.notIn]: excludeEntryIds };
         }
 
-        const existingEntries = await client.timeEntry.findMany({
+        const existingEntries = await TimeEntry.findAll({
             where: whereClause,
-            select: {
-                id: true,
-                employeeId: true,
-                startTime: true,
-                endTime: true,
-                timeSheet: {
-                    select: {
-                        id: true,
-                        workDate: true,
-                    },
-                },
+            attributes: ['id', 'employeeId', 'startTime', 'endTime'],
+            include: {
+                association: 'timeSheet',
+                attributes: ['id', 'workDate'],
+                required: true,
             },
+            ...(tx ? { transaction: tx } : {}),
         });
 
         // Group existing entries by employee for O(1) lookup
@@ -242,13 +328,11 @@ class TimeSheetService {
      * @param {string} monthPeriod - เดือน "YYYY-MM"
      * @param {Array} accommodationDates - วันที่ ["2024-01-01", "2024-01-05"]
      * @param {Array} excludeEntryIds - ID ของ entries ที่จะยกเว้น
-     * @param {Object} tx - Prisma transaction client (optional)
+     * @param {Object} tx - Sequelize transaction (optional)
      * @throws {HttpError} ถ้ามี ACCOMMODATION ซ้ำ
      */
     async _validateNoAccommodationDuplicates(employeeId, monthPeriod, accommodationDates, excludeEntryIds = [], tx = null) {
         if (!accommodationDates || accommodationDates.length === 0) return;
-
-        const client = tx || prisma;
 
         // Check internal duplicates
         const seen = new Set();
@@ -269,18 +353,27 @@ class TimeSheetService {
         }
 
         // Query existing ACCOMMODATION entries
+        // (แทน where timeSheet: { monthPeriod } ของ Prisma ด้วย include.where + required:
+        // INNER JOIN ที่มีเงื่อนไขใน ON — ห้ามใช้ nested where key '$timeSheet.monthPeriod$'
+        // เพราะมีปัญหา field-mapping กับ model ที่ underscored)
         const whereClause = {
             employeeId,
             workType: 'ACCOMMODATION',
-            timeSheet: { monthPeriod },
         };
         if (excludeEntryIds.length > 0) {
-            whereClause.id = { notIn: excludeEntryIds };
+            whereClause.id = { [Op.notIn]: excludeEntryIds };
         }
 
-        const existingEntries = await client.timeEntry.findMany({
+        const existingEntries = await TimeEntry.findAll({
             where: whereClause,
-            select: { id: true, startTime: true },
+            attributes: ['id', 'startTime'],
+            include: {
+                association: 'timeSheet',
+                attributes: [],
+                where: { monthPeriod },
+                required: true,
+            },
+            ...(tx ? { transaction: tx } : {}),
         });
 
         // Check duplicates with database
@@ -346,55 +439,41 @@ class TimeSheetService {
 
         if (query.startDate && query.endDate) {
             where.workDate = {
-                gte: combineDateAndTime(query.startDate, '00:00:00'),
-                lte: combineDateAndTime(query.endDate, '23:59:59'),
+                [Op.gte]: combineDateAndTime(query.startDate, '00:00:00'),
+                [Op.lte]: combineDateAndTime(query.endDate, '23:59:59'),
             };
         }
 
-        const [timeSheets, total] = await Promise.all([
-            prisma.timeSheet.findMany({
-                where,
-                select: {
-                    ...prismaSelectDefault.timeSheet,
-                    createdAt: true,
-                    workLeader: {
-                        select: {
-                            id: true,
-                            name: true,
-                            branch: {
-                                select: prismaSelectDefault.branch,
-                            },
-                        },
-                    },
-                    employee: {
-                        select: {
-                            id: true,
-                            firstName: true,
-                            lastName: true,
-                        },
-                    },
-                    _count: {
-                        select: {
-                            timeEntries: {
-                                where: { isNegative: false },
-                            },
-                        },
+        const { rows: timeSheets, count: total } = await TimeSheet.findAndCountAll({
+            where,
+            attributes: ['id', 'sheetType', 'workDate', 'monthPeriod', 'status', 'files', 'createdAt'],
+            include: [
+                {
+                    association: 'workLeader',
+                    attributes: ['id', 'name'],
+                    include: {
+                        association: 'branch',
+                        attributes: ['id', 'name', 'fullname'],
                     },
                 },
-                skip: (page - 1) * limit,
-                take: limit,
-                orderBy: {
-                    [sortBy]: sort,
+                {
+                    association: 'employee',
+                    attributes: ['id', 'firstName', 'lastName'],
                 },
-            }),
-            prisma.timeSheet.count({ where }),
-        ]);
+            ],
+            distinct: true,
+            offset: (page - 1) * limit,
+            limit,
+            order: [[sortBy, sort]],
+        });
+
+        // นับ entries (isNegative: false) ต่อ sheet — แทน _count ของ Prisma
+        const entryCounts = await this._countPositiveEntries(timeSheets.map((ts) => ts.id));
 
         // Transform data
         const data = timeSheets.map((ts) => ({
-            ...ts,
-            entryCount: ts._count.timeEntries,
-            _count: undefined,
+            ...ts.toJSON(),
+            entryCount: entryCounts.get(ts.id) ?? 0,
         }));
 
         return {
@@ -416,40 +495,42 @@ class TimeSheetService {
      * @throws {AppError} ไม่พบ TimeSheet (notFound)
      */
     async getTimeSheetById({ id }) {
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id },
-            select: {
-                ...prismaSelectDefault.timeSheet,
-                createdAt: true,
-                updatedAt: true,
-                workLeader: {
-                    select: {
-                        id: true,
-                        name: true,
-                        branch: {
-                            select: prismaSelectDefault.branch,
-                        },
+        const timeSheet = await TimeSheet.findByPk(id, {
+            attributes: ['id', 'sheetType', 'workDate', 'monthPeriod', 'status', 'files', 'createdAt', 'updatedAt'],
+            include: [
+                {
+                    association: 'workLeader',
+                    attributes: ['id', 'name'],
+                    include: {
+                        association: 'branch',
+                        attributes: ['id', 'name', 'fullname'],
                     },
                 },
-                employee: {
-                    select: {
-                        id: true,
-                        firstName: true,
-                        lastName: true,
+                {
+                    association: 'employee',
+                    attributes: ['id', 'firstName', 'lastName'],
+                },
+                {
+                    association: 'timeEntries',
+                    attributes: [
+                        'id', 'employeeId', 'startTime', 'endTime', 'shiftType', 'workType',
+                        'status', 'otRate', 'accommodation', 'note', 'isNegative', 'isRetro',
+                        'paidValue', 'paidDate', 'referenceEntryId',
+                    ],
+                    include: {
+                        association: 'employee',
+                        attributes: ['id', 'firstName', 'lastName'],
                     },
                 },
-                timeEntries: {
-                    select: prismaSelectDefault.timeEntry,
-                    orderBy: { id: 'asc' },
-                },
-            },
+            ],
+            order: [[{ model: TimeEntry, as: 'timeEntries' }, 'id', 'ASC']],
         });
 
         if (!timeSheet) {
             throw err.notFound({ id });
         }
 
-        return timeSheet;
+        return timeSheet.toJSON();
     }
 
     /**
@@ -467,19 +548,19 @@ class TimeSheetService {
      */
     async createWorkerTimeSheet({ workLeaderId, workDate, allowDuplicate, pattern, entries, createBy }) {
         // 1. Validate workLeader exists
-        const workLeader = await prisma.workLeader.findUnique({
-            where: { id: workLeaderId },
-            select: { id: true },
+        const workLeader = await WorkLeader.findByPk(workLeaderId, {
+            attributes: ['id'],
         });
         if (!workLeader) {
             throw err.notFound({ workLeaderId }, 'ไม่พบหัวหน้างาน');
         }
 
         // 2. Validate all employees exist
+        // (ดึง firstName/lastName มาด้วยเพื่อแนบใน response ตาม select เดิมของ entry)
         const employeeIds = [...new Set(entries.map((e) => e.employeeId))];
-        const employees = await prisma.employee.findMany({
-            where: { id: { in: employeeIds } },
-            select: { id: true },
+        const employees = await Employee.findAll({
+            where: { id: { [Op.in]: employeeIds } },
+            attributes: ['id', 'firstName', 'lastName'],
         });
 
         if (employees.length !== employeeIds.length) {
@@ -487,6 +568,7 @@ class TimeSheetService {
             const missingIds = employeeIds.filter((id) => !foundIds.includes(id));
             throw err.notFound({ missingEmployeeIds: missingIds }, 'ไม่พบพนักงานบางคน');
         }
+        const employeeById = new Map(employees.map((e) => [e.id, e]));
 
         // 3. Build DateTime objects
         const workDateObj = combineDateAndTime(workDate, "00:00:00");
@@ -501,15 +583,16 @@ class TimeSheetService {
         const otRate = pattern.ot || 0;
 
         // 5. Execute in transaction
-        const result = await prisma.$transaction(async (tx) => {
+        const result = await sequelize.transaction(async (t) => {
             // Check for duplicate if allowDuplicate is false
             if (!allowDuplicate) {
-                const existingSheet = await tx.timeSheet.findFirst({
+                const existingSheet = await TimeSheet.findOne({
                     where: {
                         workLeaderId,
                         workDate: workDateObj,
                     },
-                    select: { id: true },
+                    attributes: ['id'],
+                    transaction: t,
                 });
                 if (existingSheet) {
                     throw err.conflict(
@@ -520,43 +603,39 @@ class TimeSheetService {
             }
 
             // Check for time overlaps for each employee
-            await this._validateNoOverlaps(entriesWithDateTime, [], tx);
+            await this._validateNoOverlaps(entriesWithDateTime, [], t);
 
             // Create TimeSheet
-            const timeSheet = await tx.timeSheet.create({
-                data: {
-                    workLeaderId,
-                    workDate: workDateObj,
-                    sheetType: 'DAILY',
-                    status: 'PENDING',
-                    createBy,
-                },
-                select: prismaSelectDefault.timeSheet,
-            });
+            const timeSheet = await TimeSheet.create({
+                workLeaderId,
+                workDate: workDateObj,
+                sheetType: 'DAILY',
+                status: 'PENDING',
+                createBy,
+            }, { transaction: t });
 
             // Create all TimeEntries
             const timeEntries = await Promise.all(
                 entriesWithDateTime.map((entry) =>
-                    tx.timeEntry.create({
-                        data: {
-                            timeSheetId: timeSheet.id,
-                            employeeId: entry.employeeId,
-                            startTime: entry.startTime,
-                            endTime: entry.endTime,
-                            shiftType: entry.shiftType,
-                            workType,
-                            otRate,
-                            accommodation: 0,
-                            isNegative: false,
-                        },
-                        select: prismaSelectDefault.timeEntry,
-                    })
+                    TimeEntry.create({
+                        timeSheetId: timeSheet.id,
+                        employeeId: entry.employeeId,
+                        startTime: entry.startTime,
+                        endTime: entry.endTime,
+                        shiftType: entry.shiftType,
+                        workType,
+                        otRate,
+                        accommodation: 0,
+                        isNegative: false,
+                    }, { transaction: t })
                 )
             );
 
             return {
-                ...timeSheet,
-                timeEntries,
+                ...this._pickTimeSheetFields(timeSheet),
+                timeEntries: timeEntries.map((entry) =>
+                    this._entryWithEmployee(entry, employeeById.get(entry.employeeId) || null)
+                ),
             };
         });
 
@@ -575,9 +654,9 @@ class TimeSheetService {
      */
     async createDriverTimeSheet({ employeeId, monthPeriod, allowDuplicate, entries, createBy }) {
         // 1. Validate employee exists
-        const employee = await prisma.employee.findUnique({
-            where: { id: employeeId },
-            select: { id: true },
+        // (ดึง firstName/lastName มาด้วยเพื่อแนบใน response ตาม select เดิมของ entry)
+        const employee = await Employee.findByPk(employeeId, {
+            attributes: ['id', 'firstName', 'lastName'],
         });
         if (!employee) {
             throw err.notFound({ employeeId }, 'ไม่พบพนักงาน');
@@ -626,15 +705,16 @@ class TimeSheetService {
         }
 
         // 6. Create timesheet + entries in transaction
-        const result = await prisma.$transaction(async (tx) => {
+        const result = await sequelize.transaction(async (t) => {
             // Check for duplicate if allowDuplicate is false
             if (!allowDuplicate) {
-                const existingSheet = await tx.timeSheet.findFirst({
+                const existingSheet = await TimeSheet.findOne({
                     where: {
                         employeeId,
                         monthPeriod,
                     },
-                    select: { id: true },
+                    attributes: ['id'],
+                    transaction: t,
                 });
                 if (existingSheet) {
                     throw err.conflict(
@@ -644,43 +724,39 @@ class TimeSheetService {
                 }
             }
 
-            const timeSheet = await tx.timeSheet.create({
-                data: {
-                    employeeId,
-                    monthPeriod,
-                    sheetType: 'MONTHLY',
-                    status: 'PENDING',
-                    createBy,
-                },
-                select: {
-                    id: true,
-                    sheetType: true,
-                    monthPeriod: true,
-                    status: true,
-                    createdAt: true,
-                },
-            });
+            const timeSheet = await TimeSheet.create({
+                employeeId,
+                monthPeriod,
+                sheetType: 'MONTHLY',
+                status: 'PENDING',
+                createBy,
+            }, { transaction: t });
 
             const createdEntries = await Promise.all(
                 entriesWithDateTime.map((entry) =>
-                    tx.timeEntry.create({
-                        data: {
-                            timeSheetId: timeSheet.id,
-                            employeeId,
-                            startTime: entry.startTime,
-                            endTime: entry.endTime,
-                            workType: entry.workType,
-                            otRate: entry.otRate || 0,
-                            accommodation: entry.accommodation || 0,
-                            shiftType: 'REGULAR',
-                            isNegative: false,
-                        },
-                        select: prismaSelectDefault.timeEntry,
-                    })
+                    TimeEntry.create({
+                        timeSheetId: timeSheet.id,
+                        employeeId,
+                        startTime: entry.startTime,
+                        endTime: entry.endTime,
+                        workType: entry.workType,
+                        otRate: entry.otRate || 0,
+                        accommodation: entry.accommodation || 0,
+                        shiftType: 'REGULAR',
+                        isNegative: false,
+                    }, { transaction: t })
                 )
             );
 
-            return { ...timeSheet, timeEntries: createdEntries };
+            return {
+                // select เดิม: id, sheetType, monthPeriod, status, createdAt
+                id: timeSheet.id,
+                sheetType: timeSheet.sheetType,
+                monthPeriod: timeSheet.monthPeriod,
+                status: timeSheet.status,
+                createdAt: timeSheet.createdAt,
+                timeEntries: createdEntries.map((entry) => this._entryWithEmployee(entry, employee)),
+            };
         });
 
         return result;
@@ -695,39 +771,34 @@ class TimeSheetService {
      */
     async updateTimeSheetStatus(id, status) {
         // ตรวจสอบว่ามี timeSheet อยู่จริง
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id },
-            select: { id: true, status: true },
+        const timeSheet = await TimeSheet.findByPk(id, {
+            attributes: ['id', 'status'],
         });
 
         if (!timeSheet) {
             throw err.notFound({ id });
         }
 
-        const updated = await prisma.timeSheet.update({
-            where: { id },
-            data: { status },
-            select: {
-                ...prismaSelectDefault.timeSheet,
-                createdAt: true,
-                updatedAt: true,
-                workLeader: {
-                    select: {
-                        id: true,
-                        name: true,
-                    },
+        await TimeSheet.update(
+            { status },
+            { where: { id } },
+        );
+
+        const updated = await TimeSheet.findByPk(id, {
+            attributes: ['id', 'sheetType', 'workDate', 'monthPeriod', 'status', 'files', 'createdAt', 'updatedAt'],
+            include: [
+                {
+                    association: 'workLeader',
+                    attributes: ['id', 'name'],
                 },
-                employee: {
-                    select: {
-                        id: true,
-                        firstName: true,
-                        lastName: true,
-                    },
+                {
+                    association: 'employee',
+                    attributes: ['id', 'firstName', 'lastName'],
                 },
-            },
+            ],
         });
 
-        return updated;
+        return updated.toJSON();
     }
 
     // ============================================
@@ -749,9 +820,8 @@ class TimeSheetService {
      */
     async createCorrectionTimeEntry(timeSheetId, data) {
         // 1. Validate timesheet exists
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id: timeSheetId },
-            select: { id: true, status: true },
+        const timeSheet = await TimeSheet.findByPk(timeSheetId, {
+            attributes: ['id', 'status'],
         });
 
         if (!timeSheet) {
@@ -759,20 +829,13 @@ class TimeSheetService {
         }
 
         // 2. Find original entry
-        const originalEntry = await prisma.timeEntry.findUnique({
-            where: { id: data.originalEntryId },
-            select: {
-                id: true,
-                timeSheetId: true,
-                employeeId: true,
-                startTime: true,
-                endTime: true,
-                shiftType: true,
-                workType: true,
-                otRate: true,
-                paidValue: true,
-                paidDate: true,
-            },
+        // (attribute list เดิมของ Prisma select — ไม่มี isNegative/accommodation
+        //  จึงคงไว้ตามเดิมเพื่อให้ behavior ตรงกับโค้ดเวอร์ชันก่อน)
+        const originalEntry = await TimeEntry.findByPk(data.originalEntryId, {
+            attributes: [
+                'id', 'timeSheetId', 'employeeId', 'startTime', 'endTime',
+                'shiftType', 'workType', 'otRate', 'paidValue', 'paidDate',
+            ],
         });
 
         if (!originalEntry) {
@@ -808,15 +871,16 @@ class TimeSheetService {
         }
 
         // 5. Validate no overlap with existing negative entries for this employee
-        const overlappingNegative = await prisma.timeEntry.findFirst({
+        const overlappingNegative = await TimeEntry.findOne({
             where: {
                 employeeId: originalEntry.employeeId,
                 isNegative: true,
                 referenceEntryId: originalEntry.id,
-                startTime: { lt: endTime },
-                endTime: { gt: startTime },
+                startTime: { [Op.lt]: endTime },
+                endTime: { [Op.gt]: startTime },
             },
-            select: { id: true, startTime: true, endTime: true },
+            attributes: ['id', 'startTime', 'endTime'],
+            order: [['id', 'ASC']],
         });
 
         if (overlappingNegative) {
@@ -827,23 +891,27 @@ class TimeSheetService {
         }
 
         // 6. Create negative entry
-        return prisma.timeEntry.create({
-            data: {
-                timeSheetId,
-                employeeId: originalEntry.employeeId,
-                startTime,
-                endTime,
-                shiftType: originalEntry.shiftType,
-                workType: originalEntry.workType,
-                otRate: originalEntry.otRate,
-                accommodation: 0,
-                isNegative: true,
-                referenceEntryId: originalEntry.id,
-                createBy: data.createBy,
-                note: data.note || null,
-            },
-            select: prismaSelectDefault.timeEntry,
+        const entry = await TimeEntry.create({
+            timeSheetId,
+            employeeId: originalEntry.employeeId,
+            startTime,
+            endTime,
+            shiftType: originalEntry.shiftType,
+            workType: originalEntry.workType,
+            otRate: originalEntry.otRate,
+            accommodation: 0,
+            isNegative: true,
+            referenceEntryId: originalEntry.id,
+            createBy: data.createBy,
+            note: data.note || null,
         });
+
+        // select เดิม (prismaSelectDefault.timeEntry) รวม employee — ดึงชื่อมาแนบ
+        const employee = await Employee.findByPk(originalEntry.employeeId, {
+            attributes: ['id', 'firstName', 'lastName'],
+        });
+
+        return this._entryWithEmployee(entry, employee);
     }
 
     /**
@@ -852,9 +920,8 @@ class TimeSheetService {
      * @throws {AppError} ไม่พบ TimeSheet หรือไม่ใช่สถานะ PENDING
      */
     async deleteTimeSheet(id) {
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id },
-            select: { id: true, status: true },
+        const timeSheet = await TimeSheet.findByPk(id, {
+            attributes: ['id', 'status'],
         });
 
         if (!timeSheet) {
@@ -867,8 +934,9 @@ class TimeSheetService {
             });
         }
 
-        // Prisma schema มี onDelete: Cascade สำหรับ entries จะถูกลบอัตโนมัติ
-        await prisma.timeSheet.delete({ where: { id } });
+        // Schema มี onDelete: Cascade สำหรับ entries (FK ของ MySQL สร้างด้วย sync)
+        // จะถูกลบอัตโนมัติ
+        await TimeSheet.destroy({ where: { id } });
     }
 
     // ============================================
@@ -885,9 +953,8 @@ class TimeSheetService {
      */
     async createWorkerTimeEntry(timeSheetId, data) {
         // 1. ตรวจสอบ timesheet เป็น DAILY และไม่ได้ FILLED
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id: timeSheetId },
-            select: prismaSelectDefault.timeSheet,
+        const timeSheet = await TimeSheet.findByPk(timeSheetId, {
+            attributes: ['id', 'sheetType', 'workDate', 'monthPeriod', 'status', 'files'],
         });
 
         if (!timeSheet) {
@@ -903,19 +970,19 @@ class TimeSheetService {
         }
 
         // 2. Validate employee exists
-        const employee = await prisma.employee.findUnique({
-            where: { id: data.employeeId },
-            select: { id: true },
+        // (ดึง firstName/lastName มาด้วยเพื่อแนบใน response ตาม select เดิมของ entry)
+        const employee = await Employee.findByPk(data.employeeId, {
+            attributes: ['id', 'firstName', 'lastName'],
         });
         if (!employee) {
             throw err.notFound({ employeeId: data.employeeId }, 'ไม่พบพนักงาน');
         }
 
         // 3. ดึง pattern จาก entry แรกใน timesheet
-        const firstEntry = await prisma.timeEntry.findFirst({
+        const firstEntry = await TimeEntry.findOne({
             where: { timeSheetId },
-            select: { workType: true, otRate: true },
-            orderBy: { id: 'asc' },
+            attributes: ['workType', 'otRate'],
+            order: [['id', 'ASC']],
         });
 
         // ถ้ายังไม่มี entry → throw error (ต้องสร้าง timesheet พร้อม entries ก่อน)
@@ -939,21 +1006,20 @@ class TimeSheetService {
         }]);
 
         // 6. Create entry with pattern from first entry
-        return prisma.timeEntry.create({
-            data: {
-                timeSheetId,
-                employeeId: data.employeeId,
-                startTime,
-                endTime,
-                shiftType: data.shiftType || 'REGULAR',
-                workType: firstEntry.workType,
-                otRate: firstEntry.otRate,
-                accommodation: 0,
-                isNegative: false,
-                note: data.note || null,
-            },
-            select: prismaSelectDefault.timeEntry,
+        const entry = await TimeEntry.create({
+            timeSheetId,
+            employeeId: data.employeeId,
+            startTime,
+            endTime,
+            shiftType: data.shiftType || 'REGULAR',
+            workType: firstEntry.workType,
+            otRate: firstEntry.otRate,
+            accommodation: 0,
+            isNegative: false,
+            note: data.note || null,
         });
+
+        return this._entryWithEmployee(entry, employee);
     }
 
     /**
@@ -967,9 +1033,8 @@ class TimeSheetService {
      */
     async updateWorkerTimeEntry(timeSheetId, entryId, data) {
         // 1. Validate timesheet
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id: timeSheetId },
-            select: prismaSelectDefault.timeSheet,
+        const timeSheet = await TimeSheet.findByPk(timeSheetId, {
+            attributes: ['id', 'sheetType', 'workDate', 'status'],
         });
 
         if (!timeSheet) {
@@ -985,9 +1050,8 @@ class TimeSheetService {
         }
 
         // 2. Validate entry exists and belongs to timesheet
-        const entry = await prisma.timeEntry.findUnique({
-            where: { id: entryId },
-            select: { id: true, timeSheetId: true, employeeId: true },
+        const entry = await TimeEntry.findByPk(entryId, {
+            attributes: ['id', 'timeSheetId', 'employeeId'],
         });
 
         if (!entry || entry.timeSheetId !== timeSheetId) {
@@ -1007,17 +1071,32 @@ class TimeSheetService {
             timeOut: data.timeOut,
         }], [entryId]);
 
-        // 5. Update (เฉพาะ timeIn, timeOut, note)
-        return prisma.timeEntry.update({
-            where: { id: entryId },
-            data: {
+        // 5. Update (เฉพาะ timeIn, timeOut, note — field ที่เป็น undefined ไม่ถูกแตะ
+        //    เทียบเท่าการที่ Prisma ข้าม undefined ใน data)
+        await TimeEntry.update(
+            {
                 startTime,
                 endTime,
-                shiftType: data.shiftType,
-                note: data.note,
+                ...(data.shiftType !== undefined && { shiftType: data.shiftType }),
+                ...(data.note !== undefined && { note: data.note }),
             },
-            select: prismaSelectDefault.timeEntry,
+            { where: { id: entryId } },
+        );
+
+        // select เดิม: prismaSelectDefault.timeEntry (รวม employee)
+        const updated = await TimeEntry.findByPk(entryId, {
+            attributes: [
+                'id', 'employeeId', 'startTime', 'endTime', 'shiftType', 'workType',
+                'status', 'otRate', 'accommodation', 'note', 'isNegative', 'isRetro',
+                'paidValue', 'paidDate', 'referenceEntryId',
+            ],
+            include: {
+                association: 'employee',
+                attributes: ['id', 'firstName', 'lastName'],
+            },
         });
+
+        return updated.toJSON();
     }
 
     // ============================================
@@ -1033,12 +1112,8 @@ class TimeSheetService {
      */
     async createDriverTimeEntry(timeSheetId, data) {
         // 1. Validate timesheet เป็น MONTHLY (read-only checks, ไม่ต้องใส่ transaction)
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id: timeSheetId },
-            select: {
-                ...prismaSelectDefault.timeSheet,
-                employeeId: true,
-            },
+        const timeSheet = await TimeSheet.findByPk(timeSheetId, {
+            attributes: ['id', 'sheetType', 'workDate', 'monthPeriod', 'status', 'employeeId'],
         });
 
         if (!timeSheet) {
@@ -1054,7 +1129,7 @@ class TimeSheetService {
         }
 
         // 2. Execute validation + create in transaction
-        return prisma.$transaction(async (tx) => {
+        return sequelize.transaction(async (t) => {
             // Build DateTime based on workType
             let startTime = null;
             let endTime = null;
@@ -1069,7 +1144,7 @@ class TimeSheetService {
                     timeSheet.monthPeriod,
                     [data.date],
                     [],
-                    tx
+                    t
                 );
             } else {
                 startTime = combineDateAndTime(data.date, data.timeIn);
@@ -1082,28 +1157,33 @@ class TimeSheetService {
                     endTime,
                     timeIn: data.timeIn,
                     timeOut: data.timeOut,
-                }], [], tx);
+                }], [], t);
             }
 
             // Validate workType rules
             this._validateWorkTypeRules(data, startTime, endTime);
 
             // Create entry
-            return tx.timeEntry.create({
-                data: {
-                    timeSheetId,
-                    employeeId: timeSheet.employeeId,
-                    startTime,
-                    endTime,
-                    shiftType: 'REGULAR',
-                    workType: data.workType,
-                    otRate: data.otRate ?? 0,
-                    accommodation: data.accommodation ?? 0,
-                    isNegative: false,
-                    note: data.note || null,
-                },
-                select: prismaSelectDefault.timeEntry,
+            const entry = await TimeEntry.create({
+                timeSheetId,
+                employeeId: timeSheet.employeeId,
+                startTime,
+                endTime,
+                shiftType: 'REGULAR',
+                workType: data.workType,
+                otRate: data.otRate ?? 0,
+                accommodation: data.accommodation ?? 0,
+                isNegative: false,
+                note: data.note || null,
+            }, { transaction: t });
+
+            // select เดิม (prismaSelectDefault.timeEntry) รวม employee — ดึงชื่อมาแนบ
+            const employee = await Employee.findByPk(timeSheet.employeeId, {
+                attributes: ['id', 'firstName', 'lastName'],
+                transaction: t,
             });
+
+            return this._entryWithEmployee(entry, employee);
         });
     }
 
@@ -1118,9 +1198,8 @@ class TimeSheetService {
      */
     async updateDriverTimeEntry(timeSheetId, entryId, data) {
         // 1. Validate timesheet
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id: timeSheetId },
-            select: prismaSelectDefault.timeSheet,
+        const timeSheet = await TimeSheet.findByPk(timeSheetId, {
+            attributes: ['id', 'sheetType', 'status'],
         });
 
         if (!timeSheet) {
@@ -1136,11 +1215,16 @@ class TimeSheetService {
         }
 
         // 2. Validate entry
-        const entry = await prisma.timeEntry.findUnique({
-            where: { id: entryId },
-            select: {
-                ...prismaSelectDefault.timeEntry,
-                timeSheetId: true,
+        // (select เดิม: ...prismaSelectDefault.timeEntry + timeSheetId — รวม employee)
+        const entry = await TimeEntry.findByPk(entryId, {
+            attributes: [
+                'id', 'employeeId', 'startTime', 'endTime', 'shiftType', 'workType',
+                'status', 'otRate', 'accommodation', 'note', 'isNegative', 'isRetro',
+                'paidValue', 'paidDate', 'referenceEntryId', 'timeSheetId',
+            ],
+            include: {
+                association: 'employee',
+                attributes: ['id', 'firstName', 'lastName'],
             },
         });
 
@@ -1194,28 +1278,26 @@ class TimeSheetService {
         this._validateWorkTypeRules(mergedData, finalStartTime, finalEndTime);
 
         // 5. Update
-        return prisma.timeEntry.update({
-            where: { id: entryId },
-            data: updateData,
-            select: {
-                id: true,
-                employeeId: true,
-                startTime: true,
-                endTime: true,
-                shiftType: true,
-                workType: true,
-                otRate: true,
-                accommodation: true,
-                note: true,
-                employee: {
-                    select: {
-                        id: true,
-                        firstName: true,
-                        lastName: true,
-                    },
-                },
+        if (Object.keys(updateData).length > 0) {
+            await TimeEntry.update(
+                updateData,
+                { where: { id: entryId } },
+            );
+        }
+
+        // select เดิมของ response
+        const updated = await TimeEntry.findByPk(entryId, {
+            attributes: [
+                'id', 'employeeId', 'startTime', 'endTime', 'shiftType',
+                'workType', 'otRate', 'accommodation', 'note',
+            ],
+            include: {
+                association: 'employee',
+                attributes: ['id', 'firstName', 'lastName'],
             },
         });
+
+        return updated.toJSON();
     }
 
     /**
@@ -1225,9 +1307,8 @@ class TimeSheetService {
      */
     async deleteTimeEntry(timeSheetId, entryId) {
         // 1. ตรวจสอบ entry มีอยู่และเป็นของ timesheet นี้
-        const entry = await prisma.timeEntry.findUnique({
-            where: { id: entryId },
-            select: { id: true, timeSheetId: true, isNegative: true, paidDate: true },
+        const entry = await TimeEntry.findByPk(entryId, {
+            attributes: ['id', 'timeSheetId', 'isNegative', 'paidDate'],
         });
 
         if (!entry || entry.timeSheetId !== timeSheetId) {
@@ -1247,9 +1328,8 @@ class TimeSheetService {
             // อนุญาตให้ลบได้แม้ timesheet จะ FILLED เพราะอาจถูกสร้างหลังยืนยัน
         } else {
             // isNegative = false: ตรวจสอบเพิ่มเติมว่า timesheet ต้องไม่ FILLED
-            const timeSheet = await prisma.timeSheet.findUnique({
-                where: { id: timeSheetId },
-                select: { id: true, status: true },
+            const timeSheet = await TimeSheet.findByPk(timeSheetId, {
+                attributes: ['id', 'status'],
             });
 
             if (!timeSheet) {
@@ -1264,7 +1344,7 @@ class TimeSheetService {
         }
 
         // 4. Delete entry
-        await prisma.timeEntry.delete({ where: { id: entryId } });
+        await TimeEntry.destroy({ where: { id: entryId } });
     }
 
     /**
@@ -1274,9 +1354,8 @@ class TimeSheetService {
      * @returns {Promise<TimeSheet>} ข้อมูล TimeSheet ที่อัปเดตแล้ว
      */
     async addFile(id, filePath) {
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id },
-            select: { id: true, files: true },
+        const timeSheet = await TimeSheet.findByPk(id, {
+            attributes: ['id', 'files'],
         });
 
         if (!timeSheet) {
@@ -1286,16 +1365,16 @@ class TimeSheetService {
         const currentFiles = timeSheet.files || [];
         const updatedFiles = [...currentFiles, filePath];
 
-        return prisma.timeSheet.update({
-            where: { id },
-            data: { files: updatedFiles },
-            select: {
-                ...prismaSelectDefault.timeSheet,
-                createdAt: true,
-                updatedAt: true,
-                files: true,
-            },
+        await TimeSheet.update(
+            { files: updatedFiles },
+            { where: { id } },
+        );
+
+        const updated = await TimeSheet.findByPk(id, {
+            attributes: ['id', 'sheetType', 'workDate', 'monthPeriod', 'status', 'files', 'createdAt', 'updatedAt'],
         });
+
+        return updated.toJSON();
     }
 
     /**
@@ -1305,9 +1384,8 @@ class TimeSheetService {
      * @returns {Promise<TimeSheet>} ข้อมูล TimeSheet ที่อัปเดตแล้ว
      */
     async removeFile(id, filePath) {
-        const timeSheet = await prisma.timeSheet.findUnique({
-            where: { id },
-            select: { id: true, files: true },
+        const timeSheet = await TimeSheet.findByPk(id, {
+            attributes: ['id', 'files'],
         });
 
         if (!timeSheet) {
@@ -1317,16 +1395,16 @@ class TimeSheetService {
         const currentFiles = timeSheet.files || [];
         const updatedFiles = currentFiles.filter((f) => f !== filePath);
 
-        return prisma.timeSheet.update({
-            where: { id },
-            data: { files: updatedFiles },
-            select: {
-                ...prismaSelectDefault.timeSheet,
-                createdAt: true,
-                updatedAt: true,
-                files: true,
-            },
+        await TimeSheet.update(
+            { files: updatedFiles },
+            { where: { id } },
+        );
+
+        const updated = await TimeSheet.findByPk(id, {
+            attributes: ['id', 'sheetType', 'workDate', 'monthPeriod', 'status', 'files', 'createdAt', 'updatedAt'],
         });
+
+        return updated.toJSON();
     }
 }
 

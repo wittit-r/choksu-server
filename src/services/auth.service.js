@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 
-import prisma from '../databases/prisma.js';
+import { User, Session } from '../database/index.js';
 import redis from '../databases/redis.js';
 import err from '../utils/error.js';
 import { comparePassword } from '../utils/password.js';
@@ -30,18 +30,9 @@ class AuthService {
      */
     async login(username, password) {
         // 1. ค้นหา user โดย username
-        const user = await prisma.user.findUnique({
+        const user = await User.findOne({
             where: { username },
-            select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                username: true,
-                passwordHash: true,
-                role: true,
-                isActive: true,
-                isDeleted: true,
-            }
+            attributes: ['id', 'firstName', 'lastName', 'username', 'passwordHash', 'role', 'isActive', 'isDeleted'],
         });
 
         if (!user) {
@@ -63,14 +54,12 @@ class AuthService {
         const token = this._generateToken();
 
         // 5. บันทึก session ลง Database
-        await prisma.session.create({
-            data: {
-                userId: user.id,
-                token: token.accessToken,
-                refreshToken: token.refreshToken,
-                accessExpiresAt: token.accessTokenExpiresAt,
-                refreshExpiresAt: token.refreshTokenExpiresAt
-            }
+        await Session.create({
+            userId: user.id,
+            token: token.accessToken,
+            refreshToken: token.refreshToken,
+            accessExpiresAt: token.accessTokenExpiresAt,
+            refreshExpiresAt: token.refreshTokenExpiresAt,
         });
 
         // 6. บันทึก access token ลง Redis
@@ -83,10 +72,10 @@ class AuthService {
         }));
 
         // 7. อัปเดต lastLoginAt
-        await prisma.user.update({
-            where: { id: user.id },
-            data: { lastLoginAt: new Date() }
-        });
+        await User.update(
+            { lastLoginAt: new Date() },
+            { where: { id: user.id } },
+        );
 
         // 8. คืนค่า tokens และ user info
         return {
@@ -106,21 +95,12 @@ class AuthService {
      */
     async refreshAccessToken(refreshToken) {
         // 1. ค้นหา session จาก refresh token
-        const session = await prisma.session.findUnique({
-            where: { refreshToken: refreshToken },
+        const session = await Session.findOne({
+            where: { refreshToken },
             include: {
-                user: {
-                    select: {
-                        id: true,
-                        firstName: true,
-                        lastName: true,
-                        username: true,
-                        role: true,
-                        isActive: true,
-                        isDeleted: true,
-                    }
-                }
-            }
+                association: 'user',
+                attributes: ['id', 'firstName', 'lastName', 'username', 'role', 'isActive', 'isDeleted'],
+            },
         });
 
         if (!session) {
@@ -130,7 +110,7 @@ class AuthService {
         // 2. ตรวจสอบ refresh token expiration
         if (new Date() > session.refreshExpiresAt) {
             // ลบ session ที่หมดอายุ
-            await prisma.session.delete({ where: { id: session.id } });
+            await Session.destroy({ where: { id: session.id } });
             throw err.unauthorized(null, 'Refresh token หมดอายุ กรุณาล็อกอินใหม่');
         }
 
@@ -143,14 +123,14 @@ class AuthService {
         const token = this._generateToken();
 
         // 5. อัปเดต session (rotate refresh token)
-        await prisma.session.update({
-            where: { id: session.id },
-            data: {
+        await Session.update(
+            {
                 token: token.accessToken,
                 refreshToken: token.refreshToken,
                 accessExpiresAt: token.accessTokenExpiresAt, // ไม่ต้องอัพเดท refreshExpiresAt เพราะใช้ของเดิม
-            }
-        });
+            },
+            { where: { id: session.id } },
+        );
 
         // 6. บันทึก access token ใหม่ลง Redis
         const redisKey = `${REDIS_ACCESS_PREFIX}${session.user.id}:${token.accessToken}`;
@@ -162,7 +142,7 @@ class AuthService {
         }));
 
         // 7. ลบ access token เก่าออกจาก Redis (ถ้ามี)
-        const oldRedisKey = `${REDIS_ACCESS_PREFIX}${session.user.id}:${session.accessToken}`;
+        const oldRedisKey = `${REDIS_ACCESS_PREFIX}${session.user.id}:${session.token}`;
         await redis().del(oldRedisKey);
 
         // 8. คืนค่า tokens ใหม่
@@ -188,9 +168,7 @@ class AuthService {
         }
 
         // 2. ลบ session ออกจาก Database
-        await prisma.session.deleteMany({
-            where: { token: accessToken }
-        });
+        await Session.destroy({ where: { token: accessToken } });
 
         return true;
     }

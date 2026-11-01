@@ -1,5 +1,5 @@
 import redis from "../databases/redis.js";
-import prisma from "../databases/prisma.js";
+import { Session } from "../database/index.js";
 import err from "../utils/error.js";
 
 const REDIS_ACCESS_PREFIX = "auth:access:";
@@ -33,9 +33,9 @@ const auth = async (req, res, next) => {
         }
 
         // 3. Cache miss → Check Database (Slow path + Cache Warming)
-        const session = await prisma.session.findUnique({
+        const session = await Session.findOne({
             where: { token: accessToken },
-            include: { user: true }
+            include: { association: "user" },
         });
 
         if (!session) {
@@ -53,7 +53,7 @@ const auth = async (req, res, next) => {
         // 5. ตรวจสอบ refresh token expiration (session ยังอยู่หรือไม่)
         if (now > session.refreshExpiresAt) {
             // Session หมดอายุทั้งหมด → ลบและ reject
-            await prisma.session.delete({ where: { id: session.id } });
+            await Session.destroy({ where: { id: session.id } });
             throw err.unauthorized(null, "Session หมดอายุ กรุณาล็อกอินใหม่");
         }
 
