@@ -98,7 +98,7 @@ class UserService {
         });
         if (existing) throw err.conflict({ username }, "ชื่อผู้ใช้นี้ถูกใช้งานแล้ว");
 
-        return User.create({
+        const created = await User.create({
             firstName,
             lastName,
             username,
@@ -106,10 +106,11 @@ class UserService {
             phone,
             role: role || "ACCOUNTING",
             branchId,
-        }, {
-            attributes: { exclude: ["passwordHash"] },
-            returning: true,
         });
+
+        // re-fetch ผ่าน defaultScope (ไม่มี passwordHash) — อย่าตอบ instance
+        // จาก create ตรงๆ เพราะ Sequelize ไม่ apply attributes.exclude ให้
+        return User.findByPk(created.id);
     }
 
     /**

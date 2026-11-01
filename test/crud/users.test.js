@@ -86,10 +86,9 @@ describe('CRUD: users + authorize gates', () => {
             expect(res.body.data.role).toBe('COORDINATOR');
             expect(res.body.data.isActive).toBe(true);
 
-            // FINDING (ล็อก behavior ปัจจุบัน): ตัวเลือก attributes.exclude ของ Sequelize create
-            // ไม่มีผลกับ instance ที่คืนมา → response รั่ว passwordHash ออกไปด้วย
-            // ควรแก้โดย re-fetch หรือ delete field ก่อนตอบ (security)
-            expect(res.body.data.passwordHash).toBeDefined();
+            // Security: ห้ามรั่ว passwordHash ออกไปใน response (แก้แล้วด้วย re-fetch
+            // ผ่าน defaultScope — ก่อนหน้านี้ Sequelize create ไม่ apply attributes.exclude)
+            expect(res.body.data.passwordHash).toBeUndefined();
         });
 
         it('should return 409 on duplicate username', async () => {

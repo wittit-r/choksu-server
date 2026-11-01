@@ -8,7 +8,6 @@ class AuthController {
      * Body: { username, password }
      */
     login = async (req, res) => {
-        console.log(req.body);
         // Validate input
         const body = validate(req.body, Joi.object({
             username: Joi.string().required().min(3).max(50),
