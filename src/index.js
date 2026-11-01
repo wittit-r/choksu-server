@@ -35,7 +35,12 @@ app.use("/", routes);
 // Global error exception
 app.use(errorHandler);
 
+export default app;
+
 const port = process.env.PORT || 9500;
-app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
-});
+
+if (process.env.NODE_ENV !== 'test') {
+    app.listen(port, () => {
+        console.log(`Server is running on port ${port}`);
+    });
+}

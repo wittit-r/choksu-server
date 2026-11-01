@@ -4,26 +4,29 @@
 
 ## Tech Stack
 
-- **Runtime**: Node.js
-- **Framework**: Express.js
-- **Database**: PostgreSQL ผ่าน Prisma 7.3
+- **Runtime**: Node.js (ES Modules)
+- **Framework**: Express.js 5
+- **Database**: PostgreSQL ผ่าน Prisma 7.4 (pg adapter)
 - **Validation**: Joi
-- **Caching**: Redis
+- **Caching**: Redis (ioredis)
+- **File Storage**: Cloudflare R2 (@aws-sdk/client-s3)
+- **Password Hashing**: bcryptjs
+- **Testing**: Vitest + Supertest
+- **Dev**: Nodemon, Prettier
 
 ## Project Structure
 
 ```
 backend/
-├── prisma/                      # Prisma Configuration & Schema
-│   └── schema/                  # Database schema files
+├── prisma/schema/               # Database schema (แยกตาม domain)
 └── src/
     ├── index.js                 # Express server entry point
-    ├── databases/               # Database connections
+    ├── databases/               # Prisma + Redis client instances
     ├── controllers/             # Request handlers (class-based)
     ├── services/                # Business logic layer
-    ├── middlewares/             # Custom middleware (auth, error handler)
-    ├── routes/                  # API routes definitions
-    ├── utils/                   # Helper utilities
+    ├── routes/                  # API routes (*.routes.js per module, index.js รวมทั้งหมด)
+    ├── middlewares/             # auth (JWT), errorHandler (wrap), upload (multer)
+    ├── utils/                   # error, validate, date, password, fileUpload, prismaSelectDefault
     └── libraries/               # External libraries
 ```
 
@@ -77,7 +80,7 @@ import err from "../utils/error.js";
 
 // Throw not found error
 if (!employee) {
-    throw err.notFound("ไม่พบพนักงาน");
+    throw err.notFound({ id });
 }
 ```
 
@@ -129,81 +132,33 @@ if (!employee) {
 
 ### RESTful Conventions
 
-- `GET /api/employees` - ดึงรายการ (รองรับ pagination, search)
-- `GET /api/employees/:id` - ดึงข้อมูลรายการเดียว
-- `POST /api/employees` - สร้างใหม่
-- `PATCH /api/employees/:id` - อัปเดตบาง fields
-- `DELETE /api/employees/:id` - ลบ
+- `GET /employees` - ดึงรายการ (รองรับ pagination, search)
+- `GET /employees/:id` - ดึงข้อมูลรายการเดียว
+- `POST /employees` - สร้างใหม่
+- `PATCH /employees/:id` - อัปเดตบาง fields
+- `DELETE /employees/:id` - ลบ
 
 ### Query Parameters
 
 **Pagination & Filtering:**
 ```
-GET /api/employees?page=1&limit=10&search=john
+GET /employees?page=1&limit=10&search=john
 ```
 
 ## Security Best Practices
 
 1. **Input Validation**: ตรวจสอบทุก request ด้วย Joi schemas
 2. **SQL Injection**: Prisma ป้องกันอัตโนมัติ
-3. **Authentication**: ใช้ JWT tokens
+3. **Authentication**: ใช้ access token และ refresh token
 4. **CORS**: กำหนด allowed origins ใน production
 5. **Environment Variables**: ใช้ `.env` สำหรับ sensitive data
+6. **Private Methods**: ขึ้นต้นด้วย underscore (_) และไว้บนสุดของ class หลังจาก contrucror
 
 ## Common Tasks
 
 ### เพิ่ม API Endpoint ใหม่
 
-1. **สร้าง Database Model** (ถ้าต้องการ):
-   ```
-   /prisma-db create model
-   ```
-
-2. **สร้าง Service** (`src/services/xxx.service.js`):
-   ```javascript
-   import prisma from "../databases/prisma.js";
-   import err from "../utils/error.js";
-
-   class XxxService {
-       async getXxxs(query) {
-           const [data, total] = await Promise.all([
-               prisma.xxx.findMany({ ... }),
-               prisma.xxx.count({ ... }),
-           ]);
-           return { data, pagination: { ... } };
-       }
-
-       async getXxxById(id) {
-           const xxx = await prisma.xxx.findUnique({ where: { id } });
-           if (!xxx) throw err.notFound("ไม่พบข้อมูล");
-           return xxx;
-       }
-   }
-
-   export default new XxxService();
-   ```
-
-3. **สร้าง Controller** (`src/controllers/xxx.controller.js`):
-   ```javascript
-   import { validate, Joi } from "../utils/validate.js";
-   import xxxService from "../services/xxx.service.js";
-
-   class XxxController {
-       getXxxs = async (req, res) => {
-           const query = validate(req.query, Joi.object({ ... }));
-           const result = await xxxService.getXxxs(query);
-           res.status(200).json({ status: "success", ...result });
-       };
-   }
-
-   export default new XxxController();
-   ```
-
-4. **เพิ่ม Routes** (`src/routes/index.js`):
-   ```javascript
-   import xxxController from "../controllers/xxx.controller.js";
-   router.get("/xxx", wrap(xxxController.getXxxs));
-   ```
+ใช้ skill `/add-endpoint` สำหรับ workflow และ template code แบบเต็ม
 
 ### เปลี่ยนแปลง Database Schema
 
@@ -257,8 +212,28 @@ npm run dev              # Start dev server
 /prisma-db reset         # Reset database (development only)
 ```
 
+## Business Rules Skill Sync Rule
+
+เมื่อทำงานที่เกี่ยวข้องกับ business logic (payroll, timesheet, wage rate, retroactive, ยอดจ่าย, หักเงิน, pay period, net pay, ค่า OT, ค่าที่พัก, SSO, SLF, validation):
+
+1. **อ่าน `/business-rules` skill ก่อนเริ่มงาน** — เพื่อเทียบ business rules ปัจจุบันกับที่จะแก้ไข/เพิ่ม
+2. **ถ้าพบว่า code ที่จะเขียนแตกต่างจาก skill** — หยุดและถาม user ก่อนว่า business rule เปลี่ยนจริงหรือไม่
+3. **ถ้า user ยืนยันว่าเปลี่ยนแล้ว** — อัปเดท `/business-rules` skill ให้ตรงกับ business rule ใหม่ทันที
+
 ## Skills ที่ใช้ได้
 
+- `/add-endpoint` - สร้าง API endpoint ใหม่ (controller, service, route)
 - `/prisma-db` - จัดการ database (model, migration, reset)
 - `/prisma-query` - ตัวอย่าง Prisma queries
 - `/validate-data` - ตรวจสอบความถูกต้องของข้อมูลก่อนใช้งาน
+- `/business-rules` - Business logic knowledge base (payroll, timesheet, wage rate, calculation, validation)
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
+- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)

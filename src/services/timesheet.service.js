@@ -9,7 +9,7 @@ import prismaSelectDefault from "../utils/prismaSelectDefault.js";
  * @property {string} sheetType - ประเภท (DAILY, MONTHLY)
  * @property {Date|null} workDate - วันทำงาน (DAILY)
  * @property {string|null} monthPeriod - เดือน (MONTHLY) "YYYY-MM"
- * @property {string} status - สถานะ (PENDING, FILLED, LOCKED)
+ * @property {string} status - สถานะ (PENDING, FILLED)
  * @property {Array|null} files - ไฟล์แนบ (JSON array ของ S3 paths)
  * @property {Object|null} workLeader - ข้อมูลหัวหน้างาน (DAILY)
  * @property {Object|null} employee - ข้อมูลพนักงาน (MONTHLY)
@@ -543,7 +543,7 @@ class TimeSheetService {
                             employeeId: entry.employeeId,
                             startTime: entry.startTime,
                             endTime: entry.endTime,
-                            shiftType: entry.shiftType === 'regular' ? 'REGULAR' : 'SHIFT',
+                            shiftType: entry.shiftType,
                             workType,
                             otRate,
                             accommodation: 0,
@@ -689,7 +689,7 @@ class TimeSheetService {
     /**
      * อัปเดตสถานะ TimeSheet (status only)
      * @param {number} id - TimeSheet ID
-     * @param {string} status - สถานะใหม่ (PENDING, FILLED, LOCKED)
+     * @param {string} status - สถานะใหม่ (PENDING, FILLED)
      * @returns {Promise<TimeSheet>} ข้อมูล TimeSheet ที่อัปเดตแล้ว
      * @throws {AppError} ไม่พบ TimeSheet (notFound)
      */
@@ -702,13 +702,6 @@ class TimeSheetService {
 
         if (!timeSheet) {
             throw err.notFound({ id });
-        }
-
-        // ถ้า LOCKED แล้วไม่อนุญาตให้แก้ไข
-        if (timeSheet.status === 'LOCKED') {
-            throw err.validation({
-                message: 'TimeSheet ถูกล็อคแล้ว ไม่สามารถแก้ไขได้',
-            });
         }
 
         const updated = await prisma.timeSheet.update({
@@ -891,7 +884,7 @@ class TimeSheetService {
      * @returns {Promise<Object>} ข้อมูล TimeEntry ที่สร้าง
      */
     async createWorkerTimeEntry(timeSheetId, data) {
-        // 1. ตรวจสอบ timesheet เป็น DAILY และไม่ได้ LOCKED
+        // 1. ตรวจสอบ timesheet เป็น DAILY และไม่ได้ FILLED
         const timeSheet = await prisma.timeSheet.findUnique({
             where: { id: timeSheetId },
             select: prismaSelectDefault.timeSheet,
@@ -905,8 +898,8 @@ class TimeSheetService {
             throw err.validation({ message: 'Endpoint นี้สำหรับใบลงเวลาประเภทคนงานเท่านั้น' });
         }
 
-        if (timeSheet.status === 'LOCKED') {
-            throw err.validation({ message: 'ใบลงเวลาถูกล็อคแล้ว ไม่สามารถเพิ่มรายการได้' });
+        if (timeSheet.status === 'FILLED') {
+            throw err.validation({ message: 'ใบลงเวลายืนยันแล้ว ไม่สามารถเพิ่มรายการได้' });
         }
 
         // 2. Validate employee exists
@@ -987,8 +980,8 @@ class TimeSheetService {
             throw err.validation({ message: 'Endpoint นี้สำหรับใบลงเวลาประเภทคนงานเท่านั้น' });
         }
 
-        if (timeSheet.status === 'LOCKED') {
-            throw err.validation({ message: 'ใบลงเวลาถูกล็อคแล้ว ไม่สามารถแก้ไขได้' });
+        if (timeSheet.status === 'FILLED') {
+            throw err.validation({ message: 'ใบลงเวลายืนยันแล้ว ไม่สามารถแก้ไขได้' });
         }
 
         // 2. Validate entry exists and belongs to timesheet
@@ -1056,8 +1049,8 @@ class TimeSheetService {
             throw err.validation({ message: 'Endpoint นี้สำหรับใบลงเวลาประเภทคนขับรถเท่านั้น' });
         }
 
-        if (timeSheet.status === 'LOCKED') {
-            throw err.validation({ message: 'ใบลงเวลาถูกล็อคแล้ว ไม่สามารถเพิ่มรายการได้' });
+        if (timeSheet.status === 'FILLED') {
+            throw err.validation({ message: 'ใบลงเวลายืนยันแล้ว ไม่สามารถเพิ่มรายการได้' });
         }
 
         // 2. Execute validation + create in transaction
@@ -1138,8 +1131,8 @@ class TimeSheetService {
             throw err.validation({ message: 'Endpoint นี้สำหรับใบลงเวลาประเภทคนขับรถเท่านั้น' });
         }
 
-        if (timeSheet.status === 'LOCKED') {
-            throw err.validation({ message: 'ใบลงเวลาถูกล็อคแล้ว ไม่สามารถแก้ไขได้' });
+        if (timeSheet.status === 'FILLED') {
+            throw err.validation({ message: 'ใบลงเวลายืนยันแล้ว ไม่สามารถแก้ไขได้' });
         }
 
         // 2. Validate entry
@@ -1251,9 +1244,9 @@ class TimeSheetService {
         // 3. ตรวจสอบสถานะ timesheet แยกตามประเภท entry
         if (entry.isNegative) {
             // isNegative = true: ตรวจสอบเฉพาะ paidDate ของ entry (ผ่านแล้วขั้นตอนที่ 2)
-            // อนุญาตให้ลบได้แม้ timesheet จะ LOCKED เพราะอาจถูกสร้างหลัง lock
+            // อนุญาตให้ลบได้แม้ timesheet จะ FILLED เพราะอาจถูกสร้างหลังยืนยัน
         } else {
-            // isNegative = false: ตรวจสอบเพิ่มเติมว่า timesheet ต้องไม่ LOCKED
+            // isNegative = false: ตรวจสอบเพิ่มเติมว่า timesheet ต้องไม่ FILLED
             const timeSheet = await prisma.timeSheet.findUnique({
                 where: { id: timeSheetId },
                 select: { id: true, status: true },
@@ -1263,9 +1256,9 @@ class TimeSheetService {
                 throw err.notFound({ id: timeSheetId }, 'ไม่พบ TimeSheet');
             }
 
-            if (timeSheet.status === 'LOCKED') {
+            if (timeSheet.status === 'FILLED') {
                 throw err.validation({
-                    message: 'TimeSheet ถูกล็อคแล้ว ไม่สามารถลบได้',
+                    message: 'TimeSheet ยืนยันแล้ว ไม่สามารถลบได้',
                 });
             }
         }

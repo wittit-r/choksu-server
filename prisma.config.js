@@ -8,5 +8,6 @@ export default defineConfig({
     },
     datasource: {
         url: process.env["DATABASE_URL"],
+        shadowDatabaseUrl: "postgresql://postgres:postgresql@localhost:5432/choksu_shadow",
     },
 });

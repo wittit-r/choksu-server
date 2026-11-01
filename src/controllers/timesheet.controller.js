@@ -82,7 +82,7 @@ class TimeSheetController {
             req.query,
             Joi.object({
                 sheetType: Joi.string().valid('DAILY', 'MONTHLY'),
-                status: Joi.string().valid('PENDING', 'FILLED', 'LOCKED'),
+                status: Joi.string().valid('PENDING', 'FILLED'),
                 workLeaderId: Joi.number().integer(),
                 employeeId: Joi.number().integer(),
                 monthPeriod: Joi.string().pattern(/^\d{4}-\d{2}$/),
@@ -135,7 +135,7 @@ class TimeSheetController {
         const { status } = validate(
             req.body,
             Joi.object({
-                status: Joi.string().valid('PENDING', 'FILLED', 'LOCKED').required(),
+                status: Joi.string().valid('PENDING', 'FILLED').required(),
             }),
         );
 
@@ -389,7 +389,7 @@ class TimeSheetController {
                             employeeId: Joi.number().integer().required(),
                             timeIn: Joi.time().required(),
                             timeOut: Joi.time().required(),
-                            shiftType: Joi.string().valid('regular', 'shift').default('regular'),
+                            shiftType: Joi.string().valid('REGULAR', 'SHIFT').default('REGULAR'),
                         })
                     )
                     .min(1)
