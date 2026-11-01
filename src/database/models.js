@@ -43,8 +43,8 @@ export const defineModels = (sequelize) => {
         contractNo: { type: DataTypes.STRING(50), allowNull: false },
         location: { type: DataTypes.TEXT },
         contractType: { type: DataTypes.ENUM("WORKER", "DRIVER"), allowNull: false },
-        startDate: { type: DataTypes.DATE(3), allowNull: false },
-        endDate: { type: DataTypes.DATE(3), allowNull: false },
+        startDate: { type: DataTypes.DATE, allowNull: false },
+        endDate: { type: DataTypes.DATE, allowNull: false },
     }, {
         tableName: "contracts",
         underscored: true,
@@ -56,8 +56,8 @@ export const defineModels = (sequelize) => {
         periodNo: { type: DataTypes.INTEGER, allowNull: false },
         year: { type: DataTypes.INTEGER, allowNull: false },
         employeeType: { type: DataTypes.ENUM("WORKER", "DRIVER"), allowNull: false },
-        startDate: { type: DataTypes.DATE(3), allowNull: false },
-        endDate: { type: DataTypes.DATE(3), allowNull: false },
+        startDate: { type: DataTypes.DATE, allowNull: false },
+        endDate: { type: DataTypes.DATE, allowNull: false },
         status: { type: DataTypes.ENUM("OPEN", "CLOSED"), allowNull: false, defaultValue: "OPEN" },
     }, {
         tableName: "pay_periods",
@@ -84,7 +84,7 @@ export const defineModels = (sequelize) => {
         branchId: { type: DataTypes.INTEGER },
         isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
         isDeleted: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
-        lastLoginAt: { type: DataTypes.DATE(3) },
+        lastLoginAt: { type: DataTypes.DATE },
     }, {
         tableName: "users",
         underscored: true,
@@ -99,8 +99,8 @@ export const defineModels = (sequelize) => {
         userId: { type: DataTypes.INTEGER, allowNull: false },
         token: { type: DataTypes.STRING(128), allowNull: false },
         refreshToken: { type: DataTypes.STRING(128), allowNull: false },
-        accessExpiresAt: { type: DataTypes.DATE(3), allowNull: false },
-        refreshExpiresAt: { type: DataTypes.DATE(3), allowNull: false },
+        accessExpiresAt: { type: DataTypes.DATE, allowNull: false },
+        refreshExpiresAt: { type: DataTypes.DATE, allowNull: false },
     }, {
         tableName: "sessions",
         underscored: true,
@@ -118,7 +118,7 @@ export const defineModels = (sequelize) => {
         oldValues: { type: DataTypes.JSON },
         newValues: { type: DataTypes.JSON },
         changedBy: { type: DataTypes.INTEGER, allowNull: false },
-        changedAt: { type: DataTypes.DATE(3), allowNull: false, defaultValue: literal("CURRENT_TIMESTAMP(3)") },
+        changedAt: { type: DataTypes.DATE, allowNull: false, defaultValue: literal("CURRENT_TIMESTAMP") },
     }, { tableName: "audit_logs", underscored: true, timestamps: false });
 
     // ─── องค์กร / พนักงาน / ค่าจ้าง ──────────────────────
@@ -139,7 +139,7 @@ export const defineModels = (sequelize) => {
         bankAccount: { type: DataTypes.TEXT },
         shiftType: { type: DataTypes.ENUM("REGULAR", "SHIFT"), allowNull: false },
         workLeaderId: { type: DataTypes.INTEGER },
-        startDate: { type: DataTypes.DATE(3), allowNull: false },
+        startDate: { type: DataTypes.DATE, allowNull: false },
         isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     }, {
         tableName: "employees",
@@ -155,8 +155,8 @@ export const defineModels = (sequelize) => {
         hourlyRate: decimal(12, 3, { key: "hourlyRate", extra: { allowNull: false } }),
         minuteRate: decimal(12, 3, { key: "minuteRate", extra: { allowNull: false } }),
         monthlyRate: decimal(12, 3, { key: "monthlyRate", extra: { allowNull: false } }),
-        effectiveFrom: { type: DataTypes.DATE(3), allowNull: false },
-        effectiveTo: { type: DataTypes.DATE(3) },
+        effectiveFrom: { type: DataTypes.DATE, allowNull: false },
+        effectiveTo: { type: DataTypes.DATE },
         note: { type: DataTypes.TEXT },
     }, {
         tableName: "wage_rates",
@@ -182,7 +182,7 @@ export const defineModels = (sequelize) => {
     const TimeSheet = sequelize.define("TimeSheet", {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         workLeaderId: { type: DataTypes.INTEGER },
-        workDate: { type: DataTypes.DATE(3) },
+        workDate: { type: DataTypes.DATE },
         employeeId: { type: DataTypes.INTEGER },
         monthPeriod: { type: DataTypes.STRING(10) },
         sheetType: { type: DataTypes.ENUM("DAILY", "MONTHLY"), allowNull: false, defaultValue: "DAILY" },
@@ -199,8 +199,8 @@ export const defineModels = (sequelize) => {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         timeSheetId: { type: DataTypes.INTEGER, allowNull: false },
         employeeId: { type: DataTypes.INTEGER, allowNull: false },
-        startTime: { type: DataTypes.DATE(3), allowNull: false },
-        endTime: { type: DataTypes.DATE(3) },
+        startTime: { type: DataTypes.DATE, allowNull: false },
+        endTime: { type: DataTypes.DATE },
         shiftType: { type: DataTypes.ENUM("REGULAR", "SHIFT"), allowNull: false },
         workType: { type: DataTypes.ENUM("REGULAR", "OVERTIME", "ACCOMMODATION"), allowNull: false },
         otRate: decimal(3, 1, { key: "otRate", extra: { allowNull: false, defaultValue: 0 } }),
@@ -211,8 +211,8 @@ export const defineModels = (sequelize) => {
         referenceEntryId: { type: DataTypes.INTEGER },
         createBy: { type: DataTypes.INTEGER },
         paidValue: decimal(12, 2, { key: "paidValue" }),
-        paidDate: { type: DataTypes.DATE(3) },
-        billDate: { type: DataTypes.DATE(3) },
+        paidDate: { type: DataTypes.DATE },
+        billDate: { type: DataTypes.DATE },
         note: { type: DataTypes.TEXT },
     }, {
         tableName: "time_entries",
@@ -237,7 +237,7 @@ export const defineModels = (sequelize) => {
             allowNull: false,
             defaultValue: "PENDING",
         },
-        paidDate: { type: DataTypes.DATE(3) },
+        paidDate: { type: DataTypes.DATE },
     }, {
         tableName: "payrolls",
         underscored: true,
@@ -263,10 +263,10 @@ export const defineModels = (sequelize) => {
         employeeType: { type: DataTypes.ENUM("WORKER", "DRIVER"), allowNull: false },
         branchId: { type: DataTypes.INTEGER, allowNull: false },
         contractId: { type: DataTypes.INTEGER, allowNull: false },
-        startDate: { type: DataTypes.DATE(3), allowNull: false },
-        endDate: { type: DataTypes.DATE(3), allowNull: false },
+        startDate: { type: DataTypes.DATE, allowNull: false },
+        endDate: { type: DataTypes.DATE, allowNull: false },
         status: { type: DataTypes.ENUM("DRAFT", "RECEIVED", "CANCELLED"), allowNull: false, defaultValue: "DRAFT" },
-        receivedDate: { type: DataTypes.DATE(3) },
+        receivedDate: { type: DataTypes.DATE },
     }, {
         tableName: "invoice_periods",
         underscored: true,
