@@ -3,6 +3,8 @@ name: business-rules
 description: >
   Business logic knowledge base ของระบบบริหารจัดการพนักงาน (Choksu)
   ครอบคลุม: ประเภทพนักงาน, การลงเวลา, สถานะ, สูตรคำนวณเงินเดือน, validation rules, retroactive, payroll flow
+
+> ⚠️ **กติกาเวลา (สำคัญ):** ระบบใช้ MySQL + Sequelize — ทุกคอลัมน์เวลาเป็น **เวลาไทยตรงๆ** (DATETIME หลักวินาที) อ่านด้วย `getHours()` ปกติ / แก้ DB ตรงๆ ด้วยเวลาไทยได้ / ห้ามใช้ getUTC*
   ใช้เมื่อ: ทำงานเกี่ยวกับ timesheet, payroll, wage rate, คำนวณเงิน, หักเงิน, pay period, net pay,
   OT, overtime, accommodation, ค่าที่พัก, SSO, SLF, retroactive, correction, negative entry,
   หรือต้องการเข้าใจ flow การทำงานของระบบ
@@ -92,5 +94,4 @@ PayrollStatus:   PENDING → CALCULATED → PAID | CANCELLED
 | `src/services/payroll.service.js` | CRUD payroll, recalculate, cancel |
 | `src/services/timesheet.service.js` | TimeEntry CRUD, validation, negative entry |
 | `src/services/employee.service.js` | Retroactive calculation |
-| `prisma/schema/payroll.prisma` | PayPeriod, Payroll, PayrollRelate models |
-| `prisma/schema/time-tracking.prisma` | TimeSheet, TimeEntry models |
+| `src/database/models.js` | Sequelize models ทั้งหมด (PayPeriod, Payroll, PayrollRelate, TimeSheet, TimeEntry ฯลฯ) — MySQL + timezone +07:00 |

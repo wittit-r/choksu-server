@@ -29,7 +29,7 @@
 2. ดึง TimeEntries ที่ยังไม่ linked (DRAFT + FILLED only)
 3. ดึง WageRates สร้าง Map ตามวันที่ (_getWageRatesByDate)
 4. คำนวณ paidValue สำหรับแต่ละ entry (_calculatePayrollAmounts)
-5. Bulk update paidValue ลง time_entries (SQL raw $executeRaw)
+5. Bulk update paidValue ลง time_entries (helper `_bulkUpdatePaidValue` — sequelize.query CASE WHEN)
 6. อัปเดต TimeEntry status → LOCKED
 7. สร้าง Payroll + PayrollRelate (createMany)
 ```
