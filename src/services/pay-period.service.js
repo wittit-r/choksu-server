@@ -573,6 +573,9 @@ class PayPeriodService {
             totalMinutes = Math.round(
                 (entry.endTime.getTime() - entry.startTime.getTime()) / (1000 * 60),
             );
+            // กะข้ามวัน (เช่น 22:00 → 06:00) endTime ถูกบันทึกเป็นเวลาของวันเดียวกันตอน input
+            // ทำให้ผลต่างติดลบ — บวกชดเชย 24 ชม.
+            if (totalMinutes < 0) totalMinutes += 24 * 60;
         }
 
         if (entry.workType === 'REGULAR') {
@@ -677,6 +680,8 @@ class PayPeriodService {
                         let effective = Math.round(
                             (entry.endTime.getTime() - entry.startTime.getTime()) / 60000,
                         );
+                        // กะข้ามวัน — ชดเชย 24 ชม. เมื่อผลต่างติดลบ
+                        if (effective < 0) effective += 24 * 60;
                         if (entry.shiftType === 'REGULAR') {
                             const startMin = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
                             const endMin = entry.endTime.getHours() * 60 + entry.endTime.getMinutes();
@@ -692,9 +697,11 @@ class PayPeriodService {
                     otAmount += paidValue;
                     const rateKey = String(Number(entry.otRate) || 1);
                     if (entry.endTime) {
-                        const minutes = Math.round(
+                        let minutes = Math.round(
                             (entry.endTime.getTime() - entry.startTime.getTime()) / 60000,
                         );
+                        // กะข้ามวัน — ชดเชย 24 ชม. เมื่อผลต่างติดลบ
+                        if (minutes < 0) minutes += 24 * 60;
                         if (otMinutes.hasOwnProperty(rateKey)) {
                             otMinutes[rateKey] += minutes;
                         } else {

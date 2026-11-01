@@ -5,8 +5,8 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "dev": "nodemon src/index.js",
-    "start": "node src/index.js",
+    "dev": "TZ=Asia/Bangkok nodemon src/index.js",
+    "start": "TZ=Asia/Bangkok node src/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:flows": "vitest run test/flows/",

@@ -65,6 +65,9 @@ export function createApiClient(accessToken) {
         createWorkerTimeSheet: (data) =>
             request(app).post('/timesheets/worker').send(data).set(authHeader),
 
+        createDriverTimeSheet: (data) =>
+            request(app).post('/timesheets/driver').send(data).set(authHeader),
+
         updateTimeSheet: (id, data) =>
             request(app).patch(`/timesheets/${id}`).send(data).set(authHeader),
 
