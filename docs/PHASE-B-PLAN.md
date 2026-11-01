@@ -65,7 +65,7 @@
 
 ### B3 — Rewrite services ทีละโมดูล (tests เขียวหลังแต่ละโมดูล)
 - ลำดับ: ☑ auth+user → ☑ branch/position/work-leader → ☑ employee
-  (+wages/retro) → ☑ timesheet → ☐ payroll + pay-period (ท้ายสุด — agent กำลังทำ)
+  (+wages/retro) → ☑ timesheet → ☑ payroll + pay-period — ครบทุกโมดูล
 - ☑ **Dual-test-infra (B3-0) วางแล้ว:** `DATABASE_URL`=MySQL test /
   `DATABASE_URL_PG`=PG test (prisma.js อ่าน PG ตัวนี้), global-setup สร้างทั้งสอง
   DB, helpers (db/seed/auth) เขียน+ล้างทั้งคู่, PG sequence reset ทุก clean
@@ -80,13 +80,13 @@
   - User model มี defaultScope ซ่อน passwordHash แล้ว
 - **Verify:** `npm test` หลังแต่ละโมดูล
 
-### ☐ B4 — สลับ test infra มา MySQL
+### ☑ B4 — สลับ test infra มา MySQL
 - `test/global-setup.js`: drop/create `choksu_test` (MySQL) + sync + seed
 - `test/helpers/db.js`: `SET FOREIGN_KEY_CHECKS=0` + TRUNCATE
 - `test/helpers/seed.js`: ใช้ Sequelize models
 - **Verify:** `npm test` → **16/16 เขียวบน MySQL**
 
-### ☐ B5 — เก็บกวาด + เอกสาร + seed มาตรฐาน
+### ☑ B5 — เก็บกวาด + เอกสาร + seed มาตรฐาน
 - ถอด Prisma: `prisma/`, `prisma.config.js`, deps, adapter — baseline เดิม
   ย้ายไป `docs/legacy/`
 - `scripts/seed.js` มาตรฐาน: admin, สาขา, ตำแหน่ง 9 แบบ, หัวหน้างาน,
@@ -95,7 +95,7 @@
   migrate ด้วย mysqldump) — แก้ skill ต่อเมื่อผู้ใช้ confirm ตามกติกาโปรเจค
 - `graphify update`
 
-### ☐ B6 — ยืนยันรวม + ปิดงาน
+### ☑ B6 — ยืนยันรวม + ปิดงาน
 - **Verify:** suite เขียว + browser smoke: login (admin/123456) → หน้ารอบจ่าย
   (ข้อมูลย้ายมา) → เปิดรายการจ่าย ตัวเลขตรงกับก่อนย้าย
 - commit + push `feature/db-mysql-sequelize` → merge เข้า develop (ขออนุมัติ)
@@ -123,3 +123,11 @@ frontend / export-import (รอไฟล์ธนาคาร → branch `featu
 | 2026-11-01 | B3 (auth+user+branch+position+work-leader) | ✅ tests 16/16 เขียวทุกจุด | dual-infra (B3-0) วางแล้วในขั้นนี้ |
 | 2026-11-01 | B3 (employee) | ✅ แปลงครบทุก method + smoke tests ผ่านทั้ง service/HTTP level — **tests 15/16**: flow-9 ตกเพราะเป็น structural ของ transition (retro อ่าน MySQL แต่ timesheet/payroll ยังเขียน PG) จะเขียวเองเมื่อแปลง timesheet/payroll เสร็จ | Sequelize traps ที่เจอ (จำไว้ใช้ต่อ): (1) nested where key `$wageRates.x$` ใช้ไม่ได้กับ underscored — ใช้ include.where+required อย่างเดียว (2) nested include + pagination → ดึง parent ids ก่อนแล้ว IN (3) take:1 per-parent → query รวมแล้ว pick ใน JS (4) ใส่ distinct:true ใน findAndCountAll เมื่อมี required include; dev server ที่ค้างหยุดแล้ว |
 | 2026-11-01 | B3 (timesheet) | ✅ แปลงครบทุก method — smoke 31/31 ผ่านบน MySQL (สร้าง DAILY/MONTHLY, เวลาไทยถูกต้อง, 24:00→วันถัดไป, 409 duplicates/overlaps, cascade delete) | **tests ชั่วคราว 2/16 — คาดไว้**: timesheet เขียน MySQL แล้ว แต่ pay-period ยังอ่าน PG → `created: 0` ใน 12 flows (ทุก timesheet assertion ผ่านก่อนจุดตก) — จะเขียวเมื่อ payroll/pay-period แปลงเสร็จ; flow-driver เพิ่ม mirror seed MySQL ในไฟล์ test แล้ว (ผมแก้เอง); Noticed: `createCorrectionTimeEntry` มี dead-code isNegative check มาแต่โค้ดเดิม (latent bug — ยังไม่แก้ จะรายงาน user) |
+
+| 2026-11-01 | B3 (payroll + pay-period) | ✅ แปลงครบ (raw SQL 3 จุด → `_bulkUpdatePaidValue` helper เดียว + transactions) — 12 flows เขียวกลับทันที เหลือ 2 ตัวที่ตัว test เขียน/อ่าน PG ตรงๆ | Sequelize traps เพิ่ม: include ระดับกลาง attributes:[] จะหายทั้งอัน (ใส่ ['id']), GROUP BY ต้อง qualify ('TimeEntry.employee_id') |
+| 2026-11-01 | B4 | ✅ test infra เป็น MySQL ล้วน (แปลง 4 test files + helpers + setup + global-setup) — **16/16 เขียว, suite 8.2s (เดิม ~14s)** | — |
+| 2026-11-01 | B5 | ✅ ถอด Prisma ครบ (schema/config/client/deps/.env.test), baseline → docs/legacy/, seed.js มาตรฐานพร้อม guard --yes, CLAUDE.md อัปเดต | ระหว่างทางพลาดรัน seed --reset ทับ dev DB หนึ่งครั้ง — กู้คืนสมบูรณ์ด้วย migrate ใหม่; .claude/ (skills+settings) ติดขึ้น repo ไปกับ git add -A |
+| 2026-11-01 | B6 | ✅ dev server บูตบน MySQL จริง + browser smoke: login → รอบ 1/2 มี.ค. 2026 (ข้อมูล migrate) → ตัวเลขตรงเดิม (437 / 5,253.5 / 2,035.83 รวม OT) — commit 606c480 push แล้ว | เหลือ: business-rules skill มีเนื้อหา Prisma อยู่ — รอ user confirm แก้; graphify update ยังไม่ได้รัน (คำสั่งหาไม่เจอ) |
+
+## ✅ Phase B เสร็จสมบูรณ์ (1 พ.ย. 2026)
+ระบบใช้ MySQL + Sequelize ล้วน / เวลาไทยตรงๆ / 16 tests เขียว / ข้อมูลย้ายครบ
