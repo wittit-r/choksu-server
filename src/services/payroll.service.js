@@ -168,9 +168,14 @@ class PayrollService {
 
         const { startDate, endDate } = payroll.payPeriod;
 
+        // Carryover: correction/retro จากรอบก่อน (business rule เดียวกับ createPayrolls)
+        const lookbackDays = Number(process.env.PAYROLL_LOOKBACK_DAYS || 90);
+        const lookbackStart = new Date(startDate);
+        lookbackStart.setDate(lookbackStart.getDate() - lookbackDays);
+
         const result = await sequelize.transaction(async (t) => {
-            // ดึง LOCKED time entries ของพนักงานในรอบนี้ (ที่ยังไม่มี paidDate)
-            const timeEntries = await TimeEntry.findAll({
+            // ดึง time entries ของพนักงานในรอบนี้
+            const inRangeEntries = await TimeEntry.findAll({
                 where: {
                     employeeId: payroll.employeeId,
                     startTime: { [Op.gte]: startDate, [Op.lte]: endDate },
@@ -184,6 +189,39 @@ class PayrollService {
                 order: [['startTime', 'ASC']],
                 transaction: t,
             });
+
+            // Carryover: correction/retro ที่ยัง DRAFT (ยังไม่ถูกจ่าย) ก่อน startDate ของรอบ
+            const carryoverEntries = await TimeEntry.findAll({
+                where: {
+                    employeeId: payroll.employeeId,
+                    status: 'DRAFT',
+                    [Op.or]: [{ isNegative: true }, { isRetro: true }],
+                    startTime: { [Op.gte]: lookbackStart, [Op.lt]: startDate },
+                },
+                include: {
+                    association: 'timeSheet',
+                    attributes: [],
+                    where: { status: 'FILLED' },
+                    required: true,
+                },
+                order: [['startTime', 'ASC']],
+                transaction: t,
+            });
+
+            // กันซ้ำข้ามรอบ: ตัด entry ที่ถูก link กับ payroll อื่น (ไม่ใช่ตัวเอง) ทิ้ง
+            const combined = [...inRangeEntries, ...carryoverEntries];
+            const otherLinks = combined.length > 0
+                ? await PayrollRelate.findAll({
+                    where: {
+                        timeEntryId: { [Op.in]: combined.map((e) => e.id) },
+                        payrollId: { [Op.ne]: id },
+                    },
+                    attributes: ['timeEntryId'],
+                    transaction: t,
+                })
+                : [];
+            const otherLinkedIds = new Set(otherLinks.map((r) => r.timeEntryId));
+            const timeEntries = combined.filter((e) => !otherLinkedIds.has(e.id));
 
             // เปรียบเทียบกับ relates ที่มีอยู่
             const existingRelates = await PayrollRelate.findAll({
@@ -210,9 +248,10 @@ class PayrollService {
                 );
             }
 
-            // คำนวณ paidValue ใหม่
+            // คำนวณ paidValue ใหม่ (wage map จาก lookbackStart เพื่อคำนวณ correction
+            // ด้วยอัตราของวันที่ entry ต้นฉบับ)
             const wageRatesByDate = await payPeriodService._getWageRatesByDate(
-                payroll.employeeId, startDate, endDate, t,
+                payroll.employeeId, lookbackStart, endDate, t,
             );
             const entryAmounts = payPeriodService._calculatePayrollAmounts(
                 timeEntries, wageRatesByDate,

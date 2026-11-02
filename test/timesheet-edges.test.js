@@ -436,7 +436,7 @@ describe('Timesheet edges: overlap / duplicate / ACCOMMODATION / CRUD / correcti
         expect(overlapRes.body.error.details.existingNegativeEntry.id).toBe(firstRes.body.data.id);
     });
 
-    it('correction full cycle: never enters the NEXT period; deducts in the period covering the ORIGINAL date (via recalculate)', async () => {
+    it('correction full cycle: deducts in the NEXT period via 90-day lookback (business rule)', async () => {
         // Step 1: รอบ 1 (1-15 มี.ค.) + sheet 08:00-17:00 พนักงาน A + FILLED + payroll
         const { periodId: period1Id, sheetId, originalEntryId, payrollId: payroll1Id } =
             await setupPaidEntry('2025-03-02');
@@ -477,6 +477,8 @@ describe('Timesheet edges: overlap / duplicate / ACCOMMODATION / CRUD / correcti
         expect(payroll1Before.body.data.payrollRelates[0].timeEntry.id).toBe(originalEntryId);
 
         // Step 4: รอบ 2 (16-31 มี.ค.) + sheet วันที่ 20 → payroll รอบ 2
+        // (แก้แล้วตาม business rule) createPayrolls ดึง correction ย้อนหลัง
+        // (PAYROLL_LOOKBACK_DAYS default 90 วัน) → correction เข้ารอบ 2 โดยอัตโนมัติ
         const period2Res = await api.createPayPeriod({
             periodNo: 2,
             year: 2025,
@@ -503,57 +505,53 @@ describe('Timesheet edges: overlap / duplicate / ACCOMMODATION / CRUD / correcti
         expect(payroll2Res.body.created).toBe(1);
         const payroll2Id = payroll2Res.body.payrolls[0].id;
 
-        // FINDING (สำคัญ): correction ไม่เข้ารอบ 2 ไม่ว่าทางไหน —
-        //  a) createPayrollsForPeriod กรอง isNegative: false ทั้ง candidate query
-        //  b) startTime ของ correction ผูกกับ "วันที่ของ entry ต้นฉบับ" (2 มี.ค.)
-        //     ซึ่งอยู่นอกช่วง 16-31 มี.ค. ของทั้ง createPayrolls และ recalculate
-        // ขัดกับโน้ต flows.md ที่ว่า "negative entry ใช้จ่ายในรอบถัดไป"
+        // correction ถูกดึงเข้ารอบ 2: relate มีทั้ง entry ปกติวันที่ 20 และ correction วันที่ 2
         const payroll2 = await api.getPayrollById(payroll2Id);
-        expect(payroll2.body.data.payrollRelates).toHaveLength(1);
-        expect(payroll2.body.data.payrollRelates[0].timeEntry.isNegative).toBe(false);
+        expect(payroll2.body.data.payrollRelates).toHaveLength(2);
+        const corrRelate = payroll2.body.data.payrollRelates.find(r => r.timeEntry.isNegative);
+        expect(corrRelate.timeEntry.id).toBe(corr.id);
 
-        const recalc2Res = await api.recalculatePeriod(period2Id);
-        expect(recalc2Res.status).toBe(200);
-        expect(recalc2Res.body.payrolls[0].newEntries).toBe(0);
-
+        // correction 09:00-12:00 = 180 นาที × 62.5 (อัตราของ "วันที่ entry ต้นฉบับ"
+        // ผ่าน wage map ที่เริ่มที่ lookbackStart) = 187.5 → paidValue = -187.5
         const period2Detail = await api.getPayPeriodById(period2Id);
-        expect(period2Detail.body.data.payrolls[0].summary.deductionAmount).toBe(0);
-        expect(period2Detail.body.data.payrolls[0].summary.netPay).toBe(500);
+        const summary2 = period2Detail.body.data.payrolls[0].summary;
+        expect(summary2.regularAmount).toBe(500);
+        expect(summary2.deductionAmount).toBe(187.5);
+        expect(summary2.netPay).toBe(312.5);
 
-        // Step 5: path จริงที่ deduction ทำงาน — recalculate รอบที่ "คลุมวันที่ entry ต้นฉบับ" (รอบ 1)
-        // payroll รอบ 1 ยัง PENDING (import PAID ยัง TODO) → recalculate ได้
-        const recalc1Res = await api.recalculatePeriod(period1Id);
-        expect(recalc1Res.status).toBe(200);
-        expect(recalc1Res.body.payrolls[0].newEntries).toBe(1);
-
-        const period1Detail = await api.getPayPeriodById(period1Id);
-        const summary1 = period1Detail.body.data.payrolls[0].summary;
-        // correction 09:00-12:00 = 180 นาที × 62.5 = 187.5 → paidValue = -187.5
-        expect(summary1.regularAmount).toBe(500);
-        expect(summary1.deductionAmount).toBe(187.5);
-        expect(summary1.netPay).toBe(312.5);
-
-        // (แก้แล้ว) recalculate LOCK entries ที่ link ใหม่ให้สอดคล้องกับ createPayrolls
         const corrInDb = await TimeEntry.findByPk(corr.id);
         expect(corrInDb.status).toBe('LOCKED');
         expect(Number(corrInDb.paidValue)).toBe(-187.5);
 
-        // Step 6: (แก้แล้ว) ลบ entry ที่ถูก link กับ payroll → 409 พร้อมข้อความชี้ทาง
+        // Step 5: กันซ้ำข้ามรอบ — recalculate รอบ 1 ต้อง NOT ดึง correction นี้ซ้ำ
+        // (ถูก link กับ payroll รอบ 2 ไปแล้ว → global dedup ตัดทิ้ง)
+        const recalc1Res = await api.recalculatePeriod(period1Id);
+        expect(recalc1Res.status).toBe(200);
+        expect(recalc1Res.body.payrolls[0].newEntries).toBe(0);
+        const period1Detail = await api.getPayPeriodById(period1Id);
+        expect(period1Detail.body.data.payrolls[0].summary.netPay).toBe(500);
+
+        // และรอบ 2 recalculate ซ้ำก็ไม่ double-link
+        const recalc2Res = await api.recalculatePeriod(period2Id);
+        expect(recalc2Res.status).toBe(200);
+        expect(recalc2Res.body.payrolls[0].newEntries).toBe(0);
+
+        // Step 6: ลบ entry ที่ถูก link กับ payroll → 409 พร้อมข้อความชี้ทาง
         const delLinkedRes = await api.deleteTimeEntry(sheetId, corr.id);
         expect(delLinkedRes.status).toBe(409);
         expect(delLinkedRes.body.error.code).toBe('CONFLICT');
         expect(delLinkedRes.body.error.message).toContain('ยกเลิกรายการจ่าย');
 
-        // คืนสภาพ: cancel payroll รอบ 1 (PENDING → CANCELLED, relates ถูกลบ, entries → DRAFT)
-        const cancelRes = await api.cancelPayroll(payroll1Id);
+        // คืนสภาพ: cancel payroll รอบ 2 → correction กลับ DRAFT + paidValue null
+        const cancelRes = await api.cancelPayroll(payroll2Id);
         expect(cancelRes.status).toBe(200);
 
-        // เมื่อไม่มี relate แล้ว → ลบ correction ได้ (isNegative ข้าม check สถานะ sheet ที่ FILLED)
         const delRes = await api.deleteTimeEntry(sheetId, corr.id);
         expect(delRes.status).toBe(204);
         expect(await TimeEntry.findByPk(corr.id)).toBeNull();
 
-        // sheet เหลือ entry เดิม กลับเป็น DRAFT (paidValue ถูกล้าง)
+        // sheet รอบ 1 เหลือ entry เดิม กลับเป็น DRAFT หลัง cancel รอบ 1
+        await api.cancelPayroll(payroll1Id);
         const sheetFinal = await api.getTimesheetById(sheetId);
         expect(sheetFinal.body.data.timeEntries).toHaveLength(1);
         expect(sheetFinal.body.data.timeEntries[0].status).toBe('DRAFT');

@@ -149,6 +149,40 @@ describe('Flow 9: Retro — อัตราค่าจ้างเปลี่�
         console.log(`[INFO] Expected diff: ${expectedDiff}, Actual diff: ${actualDiff}`);
 
         expect(Math.abs(actualDiff - expectedDiff)).toBeLessThan(1);
+
+        // Step 8: retro entry ถูกจ่ายใน "รอบถัดไป" — ดึงย้อนหลังด้วยกลไกเดียวกับ correction
+        // (PAYROLL_LOOKBACK_DAYS default 90 วัน) ตามโน้ต flows.md
+        const period2Res = await api.createPayPeriod({
+            periodNo: 2,
+            year: 2025,
+            employeeType: 'WORKER',
+            startDate: '2025-06-16',
+            endDate: '2025-06-30',
+        });
+        const period2Id = period2Res.body.data.id;
+
+        const sheet2Res = await api.createWorkerTimeSheet({
+            workLeaderId: seed.workLeader.id,
+            workDate: '2025-06-20',
+            pattern: { regular: true, ot: 0 },
+            entries: seed.employees.slice(0, 1).map(emp => ({
+                employeeId: emp.id,
+                timeIn: '08:00:00',
+                timeOut: '17:00:00',
+                shiftType: 'REGULAR',
+            })),
+        });
+        await api.updateTimeSheet(sheet2Res.body.data.id, { status: 'FILLED' });
+
+        const payrolls2Res = await api.createPayrolls(period2Id);
+        expect(payrolls2Res.body.created).toBe(1);
+
+        const detail2Res = await api.getPayPeriodById(period2Id);
+        const summary2 = detail2Res.body.data.payrolls[0].summary;
+        // รอบ 2 (20 มิ.ย.) ใช้อัตราใหม่ 550/วัน → regular 550 + retro 50 = สุทธิ 600
+        expect(summary2.regularAmount).toBe(550);
+        expect(summary2.retroAmount).toBe(50);
+        expect(summary2.netPay).toBe(600);
     });
 
     it('should return empty result when no paidDate entries exist', async () => {

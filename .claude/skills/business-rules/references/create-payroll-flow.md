@@ -11,7 +11,7 @@
 
 ### เงื่อนไขที่ TimeEntry จะถูกรวม
 
-เฉพาะ entry ที่ตรงเงื่อนไข **ทั้งหมด** นี้:
+เฉพาะ entry ที่ตรงเงื่อนไข **ทั้งหมด** นี้ (entry ปกติ):
 
 1. TimeSheet status = `FILLED`
 2. TimeEntry status = `DRAFT`
@@ -34,6 +34,13 @@
 7. สร้าง Payroll + PayrollRelate (createMany)
 ```
 
+### Carryover (correction/retro เข้ารอบถัดไป)
+
+นอกเหนือจาก entry ปกติในช่วงรอบ ระบบดึง **correction (isNegative) และ
+retro (isRetro) ที่ยังไม่ถูกจ่าย (status DRAFT)** ย้อนหลังจาก startDate
+ของรอบตาม `PAYROLL_LOOKBACK_DAYS` (default 90 วัน) — correction/retro จึง
+ถูกหัก/จ่ายใน **รอบถัดไป** หลังถูกสร้าง กันซ้ำข้ามรอบด้วย PayrollRelate (global)
+
 ### payRef Format
 
 ```
@@ -49,6 +56,7 @@ PAY-{year}-{periodNo 2 หลัก}-{seq 3 หลัก}
 ### recalculatePayroll(id)
 
 - ดึง time entries ทั้งหมดของพนักงานในรอบ (**รวม negative และ retro**)
+  บวก carryover ย้อนหลัง (PAYROLL_LOOKBACK_DAYS) ที่ยังไม่ถูกจ่าย
 - เพิ่ม relate ใหม่สำหรับ entries ที่ยังไม่ linked
 - คำนวณ paidValue ใหม่จาก **ทุก entry** (เก่า + ใหม่)
 - ใช้ได้เฉพาะ PENDING หรือ CALCULATED
