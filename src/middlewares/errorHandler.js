@@ -30,24 +30,6 @@ export const errorHandler = (err, req, res, next) => {
     return res.status(status).json(errorResponse);
 };
 
-export const wrap = (fn) => {
-    return (req, res, next) => {
-        try {
-            // เรียกฟังก์ชัน
-            const result = fn(req, res, next);
-
-            // ถ้าคืนเป็น promise (async) ให้ catch
-            if (result && typeof result.catch === 'function') {
-                result.catch(next);
-            }
-        } catch (err) {
-            // Sync error ส่งต่อให้ error handler
-            next(err);
-        }
-    };
-};
-
 export default {
     errorHandler,
-    wrap,
 };

@@ -145,16 +145,15 @@ File: `src/routes/{name}.routes.js`
 
 ```javascript
 import express from "express";
-import wrap from "../middlewares/errorHandler.js";
 import xxxController from "../controllers/xxx.controller.js";
 
 const router = express.Router();
 
-router.get('/', wrap(xxxController.getXxxs));
-router.get('/:id', wrap(xxxController.getXxxById));
-router.post('/', wrap(xxxController.createXxx));
-router.patch('/:id', wrap(xxxController.updateXxx));
-router.delete('/:id', wrap(xxxController.deleteXxx));
+router.get('/', xxxController.getXxxs);
+router.get('/:id', xxxController.getXxxById);
+router.post('/', xxxController.createXxx);
+router.patch('/:id', xxxController.updateXxx);
+router.delete('/:id', xxxController.deleteXxx);
 
 export default router;
 ```
@@ -194,7 +193,7 @@ Use `err` from `src/utils/error.js`:
 2. **Service** — all business logic and database operations
 3. **Validation** — validate every request with Joi
 4. **Private methods** — prefix with `_`, place at the top after constructor
-5. **Wrap** — every controller method must use `wrap()` middleware
+5. **Async errors** — Express 5 จับ rejected promise เอง ห้ามใช้ wrapper แบบ `wrap()`
 6. **Error** — use `err.notFound()` / `err.conflict()` / `err.badRequest()`, never throw raw errors
 7. **Indent** — 4 spaces, no tabs
 8. **Pagination** — use `Promise.all` for findMany + count

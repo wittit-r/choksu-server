@@ -25,7 +25,7 @@ backend/
     ├── controllers/             # Request handlers (class-based)
     ├── services/                # Business logic layer
     ├── routes/                  # API routes (*.routes.js per module, index.js รวมทั้งหมด)
-    ├── middlewares/             # auth (JWT), errorHandler (wrap), upload (multer)
+    ├── middlewares/             # auth (JWT), errorHandler, upload (multer)
     ├── utils/                   # error, validate, date, password, fileUpload, prismaSelectDefault
     └── libraries/               # External libraries
 ```
@@ -62,10 +62,10 @@ Services รับผิดชอบ business logic และ database operation
 
 ## Error Handling
 
-### Async Wrapper Middleware
+### Async Errors
 
-ไฟล์: `src/middlewares/errorHandler.js`
-`wrap()` function จะจัดการ async errors อัตโนมัติ:
+Express 5 จับ async error (rejected promise) ใน handler แล้วส่งต่อให้ `errorHandler` เอง
+ไม่ต้องใช้ wrapper แบบ `wrap()` (เคยใช้ — ถอดออกแล้ว)
 
 ### Custom Error Classes
 
