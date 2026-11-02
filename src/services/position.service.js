@@ -73,6 +73,10 @@ class PositionService {
      * @returns {Promise<Position>} ข้อมูลตำแหน่งงานที่สร้างใหม่
      */
     async createPosition(data) {
+        // ตรวจสอบ code ซ้ำก่อนสร้าง (unique index → 409 แทน 500)
+        const existing = await Position.findOne({ where: { code: data.code }, attributes: ["id"] });
+        if (existing) throw err.conflict({ code: data.code }, "รหัสตำแหน่งนี้ถูกใช้งานแล้ว");
+
         return Position.create({
             name: data.name,
             code: data.code,
@@ -95,10 +99,20 @@ class PositionService {
             throw err.notFound({ id });
         }
 
-        position.name = data.name;
-        position.code = data.code;
-        position.employeeType = data.employeeType;
-        position.isActive = data.isActive;
+        // ตรวจสอบ code ซ้ำ (ไม่รวมตัวเอง)
+        if (data.code !== undefined) {
+            const existing = await Position.findOne({
+                where: { code: data.code, id: { [Op.ne]: id } },
+                attributes: ["id"],
+            });
+            if (existing) throw err.conflict({ code: data.code }, "รหัสตำแหน่งนี้ถูกใช้งานแล้ว");
+        }
+
+        // อัปเดตเฉพาะฟิลด์ที่ส่งมา (กัน undefined → null → notNull violation)
+        if (data.name !== undefined) position.name = data.name;
+        if (data.code !== undefined) position.code = data.code;
+        if (data.employeeType !== undefined) position.employeeType = data.employeeType;
+        if (data.isActive !== undefined) position.isActive = data.isActive;
         await position.save();
 
         return position;

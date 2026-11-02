@@ -433,7 +433,7 @@ class PayPeriodService {
 
                 const newEntries = timeEntries.filter((e) => !linkedIds.has(e.id));
 
-                // เพิ่ม relate ใหม่
+                // เพิ่ม relate ใหม่ + LOCK สถานะให้สอดคล้องกับ createPayrolls
                 if (newEntries.length > 0) {
                     await PayrollRelate.bulkCreate(
                         newEntries.map((entry) => ({
@@ -441,6 +441,10 @@ class PayPeriodService {
                             timeEntryId: entry.id,
                         })),
                         { transaction: t },
+                    );
+                    await TimeEntry.update(
+                        { status: 'LOCKED' },
+                        { where: { id: newEntries.map((e) => e.id) }, transaction: t },
                     );
                 }
 

@@ -59,9 +59,7 @@ describe('CRUD: employees + wage rates', () => {
     }
 
     describe('employees', () => {
-        // FINDING: POST /employees ตอบ 200 ไม่ใช่ 201 (employee.controller.js createEmployee)
-        // test นี้ล็อก behavior ปัจจุบันไว้
-        it('should create an employee and return 200 (not 201) with shape', async () => {
+        it('should create an employee and return 201 with shape', async () => {
             const res = await api.createEmployee({
                 firstName: 'New',
                 lastName: 'Employee',
@@ -70,7 +68,7 @@ describe('CRUD: employees + wage rates', () => {
                 workLeaderId: seed.workLeader.id,
                 startDate: '2025-06-01',
             });
-            expect(res.status).toBe(200);
+            expect(res.status).toBe(201);
             expect(res.body.success).toBe(true);
             expect(res.body.data.id).toBeDefined();
             expect(res.body.data.firstName).toBe('New');
@@ -82,9 +80,8 @@ describe('CRUD: employees + wage rates', () => {
             expect(res.body.data.position).toBeNull();
         });
 
-        // FINDING: Employee มี unique index ที่ id_card (models.js) แต่ service ไม่เช็คซ้ำ
-        // → SequelizeUniqueConstraintError → 500 แทน 4xx — ล็อก behavior ปัจจุบันไว้
-        it('should return 500 on duplicate idCard (unhandled unique violation)', async () => {
+        // (แก้แล้ว) service เช็ค idCard ซ้ำก่อน create → 409 แทน 500
+        it('should return 409 on duplicate idCard', async () => {
             const res = await api.createEmployee({
                 firstName: 'Dup',
                 lastName: 'Card',
@@ -93,8 +90,8 @@ describe('CRUD: employees + wage rates', () => {
                 workLeaderId: seed.workLeader.id,
                 startDate: '2025-06-01',
             });
-            expect(res.status).toBe(500);
-            expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+            expect(res.status).toBe(409);
+            expect(res.body.error.code).toBe('CONFLICT');
         });
 
         it('should search employees by firstName', async () => {
@@ -175,8 +172,7 @@ describe('CRUD: employees + wage rates', () => {
 
     describe('wage rates', () => {
         // FINDING: POST /employees/:id/wages ตอบ 200 ไม่ใช่ 201 (employee.controller.js createWage)
-        // test นี้ล็อก behavior ปัจจุบันไว้
-        it('should create a wage and return 200 (not 201) with position included', async () => {
+        it('should create a wage and return 201 with position included', async () => {
             const res = await api.createWage(seed.employees[0].id, {
                 positionId: seed.workerPosition.id,
                 dailyRate: 600,
@@ -187,7 +183,7 @@ describe('CRUD: employees + wage rates', () => {
                 effectiveTo: null,
                 note: 'ปรับขึ้นค่าแรง',
             });
-            expect(res.status).toBe(200);
+            expect(res.status).toBe(201);
             expect(res.body.data.id).toBeDefined();
             expect(res.body.data.dailyRate).toBe(600);
             // shape ของ _getWageWithPosition: position มีแค่ name + employeeType
@@ -223,9 +219,8 @@ describe('CRUD: employees + wage rates', () => {
             expect(res.status).toBe(404);
         });
 
-        // FINDING: createWage ไม่มี validation effectiveTo > effectiveFrom
-        // (updateWage มี) → ช่วงวันที่กลับหัวถูกสร้างได้เงียบๆ — ล็อก behavior ปัจจุบันไว้
-        it('should create a wage even when effectiveTo is before effectiveFrom (no validation on create)', async () => {
+        // (แก้แล้ว) createWage validate effectiveTo > effectiveFrom เหมือน updateWage
+        it('should return 422 when effectiveTo is before effectiveFrom on create', async () => {
             const res = await api.createWage(seed.employees[0].id, {
                 positionId: seed.workerPosition.id,
                 dailyRate: 500,
@@ -235,8 +230,8 @@ describe('CRUD: employees + wage rates', () => {
                 effectiveFrom: '2025-07-01',
                 effectiveTo: '2025-06-01',
             });
-            expect(res.status).toBe(200);
-            expect(res.body.data.id).toBeDefined();
+            expect(res.status).toBe(422);
+            expect(res.body.error.code).toBe('VALIDATION_ERROR');
         });
 
         it('should return 422 when updating a wage with effectiveTo before effectiveFrom', async () => {

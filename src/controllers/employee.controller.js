@@ -61,7 +61,7 @@ class EmployeeController {
 
         const employee = await employeeService.createEmployee(body);
 
-        res.status(200).json({
+        res.status(201).json({
             success: true,
             data: employee,
         });
@@ -156,7 +156,7 @@ class EmployeeController {
             ...body,
         });
 
-        res.status(200).json({
+        res.status(201).json({
             success: true,
             data: wage,
         });

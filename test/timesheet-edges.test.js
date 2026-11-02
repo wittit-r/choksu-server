@@ -533,16 +533,16 @@ describe('Timesheet edges: overlap / duplicate / ACCOMMODATION / CRUD / correcti
         expect(summary1.deductionAmount).toBe(187.5);
         expect(summary1.netPay).toBe(312.5);
 
-        // FINDING: recalculate ดึง DRAFT negative entry เข้า relate แต่ "ไม่เปลี่ยน status เป็น LOCKED"
+        // (แก้แล้ว) recalculate LOCK entries ที่ link ใหม่ให้สอดคล้องกับ createPayrolls
         const corrInDb = await TimeEntry.findByPk(corr.id);
-        expect(corrInDb.status).toBe('DRAFT');
+        expect(corrInDb.status).toBe('LOCKED');
         expect(Number(corrInDb.paidValue)).toBe(-187.5);
 
-        // Step 6: ลบ correction ที่ถูก link แล้ว → FK payroll_relates.time_entry_id (RESTRICT) → 500
-        // FINDING: ไม่มี API path ไหนลบ correction ที่ถูก link ได้ ต้อง cancel payroll ก่อน
+        // Step 6: (แก้แล้ว) ลบ entry ที่ถูก link กับ payroll → 409 พร้อมข้อความชี้ทาง
         const delLinkedRes = await api.deleteTimeEntry(sheetId, corr.id);
-        expect(delLinkedRes.status).toBe(500);
-        expect(delLinkedRes.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+        expect(delLinkedRes.status).toBe(409);
+        expect(delLinkedRes.body.error.code).toBe('CONFLICT');
+        expect(delLinkedRes.body.error.message).toContain('ยกเลิกรายการจ่าย');
 
         // คืนสภาพ: cancel payroll รอบ 1 (PENDING → CANCELLED, relates ถูกลบ, entries → DRAFT)
         const cancelRes = await api.cancelPayroll(payroll1Id);

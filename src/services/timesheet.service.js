@@ -1,6 +1,6 @@
 import { Op } from "sequelize";
 
-import { sequelize, WorkLeader, Employee, TimeSheet, TimeEntry } from "../database/index.js";
+import { sequelize, WorkLeader, Employee, TimeSheet, TimeEntry, PayrollRelate } from "../database/index.js";
 import err from "../utils/error.js";
 import { combineDateAndTime, toLocalDate, toLocalTime } from "../utils/date.js";
 
@@ -1320,6 +1320,15 @@ class TimeSheetService {
             throw err.validation({
                 message: 'รายการเวลาจ่ายเงินแล้ว ไม่สามารถลบได้',
             });
+        }
+
+        // 2.5 ตรวจสอบว่า entry ถูกใช้ใน payroll อยู่ (FK RESTRICT → ตอบ 409 แทน 500)
+        const relateCount = await PayrollRelate.count({ where: { timeEntryId: entryId } });
+        if (relateCount > 0) {
+            throw err.conflict(
+                { entryId, relateCount },
+                'รายการเวลานี้ถูกใช้ในการจ่ายเงินแล้ว ต้องยกเลิกรายการจ่ายก่อนจึงจะลบได้',
+            );
         }
 
         // 3. ตรวจสอบสถานะ timesheet แยกตามประเภท entry

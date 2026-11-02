@@ -127,17 +127,15 @@ describe('CRUD: master data (branches / positions / work-leaders)', () => {
             expect(res.body.data.id).toBeDefined();
         });
 
-        // FINDING: Position มี unique index ที่ code (models.js) แต่ service ไม่เช็คซ้ำก่อน create
-        // → SequelizeUniqueConstraintError ไม่มี .status → errorHandler ตอบ 500 แทน 4xx
-        // test นี้ล็อก behavior ปัจจุบันไว้ (ควรแก้เป็น 409 ในอนาคต)
-        it('should return 500 on duplicate position code (unhandled unique violation)', async () => {
+        // (แก้แล้ว) service เช็ค code ซ้ำก่อน create → 409 CONFLICT แทน 500
+        it('should return 409 on duplicate position code', async () => {
             const res = await api.createPosition({
                 name: 'Another Worker',
                 code: 'RW', // ซ้ำกับ seed
                 employeeType: 'WORKER',
             });
-            expect(res.status).toBe(500);
-            expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+            expect(res.status).toBe(409);
+            expect(res.body.error.code).toBe('CONFLICT');
         });
 
         it('should list positions with search and employeeType filter', async () => {
@@ -180,11 +178,8 @@ describe('CRUD: master data (branches / positions / work-leaders)', () => {
             });
         });
 
-        // FINDING: updatePosition กำหนดทุก field จาก body (position.name = data.name)
-        // ถ้าไม่ส่ง field ที่ allowNull:false (name/code/employeeType/isActive)
-        // → undefined → Sequelize save() throw notNull Violation → 500
-        // (เกิดเหมือนกันกับ work-leader ที่ไม่ส่ง branchId/isActive) — ล็อก behavior ปัจจุบันไว้
-        it('should return 500 on partial update without required fields (notNull violation)', async () => {
+        // (แก้แล้ว) update กำหนดเฉพาะ field ที่ส่ง → PATCH บางส่วนได้ ค่าเดิมคงเหมือนเดิม
+        it('should allow partial update — untouched fields keep their values', async () => {
             const created = await api.createPosition({
                 name: 'Partial Pos',
                 code: 'PP',
@@ -192,8 +187,11 @@ describe('CRUD: master data (branches / positions / work-leaders)', () => {
             });
 
             const res = await api.updatePosition(created.body.data.id, { isActive: false });
-            expect(res.status).toBe(500);
-            expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+            expect(res.status).toBe(200);
+            expect(res.body.data.isActive).toBe(false);
+            expect(res.body.data.name).toBe('Partial Pos');
+            expect(res.body.data.code).toBe('PP');
+            expect(res.body.data.employeeType).toBe('WORKER');
         });
     });
 

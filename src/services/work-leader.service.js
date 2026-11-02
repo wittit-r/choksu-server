@@ -125,10 +125,11 @@ class WorkLeaderService {
             await this._validateBranchExists(data.branchId);
         }
 
-        workLeader.name = data.name;
-        workLeader.refNo = data.refNo;
-        workLeader.branchId = data.branchId;
-        workLeader.isActive = data.isActive;
+        // อัปเดตเฉพาะฟิลด์ที่ส่งมา (กัน undefined → null → notNull violation)
+        if (data.name !== undefined) workLeader.name = data.name;
+        if (data.refNo !== undefined) workLeader.refNo = data.refNo;
+        if (data.branchId !== undefined) workLeader.branchId = data.branchId;
+        if (data.isActive !== undefined) workLeader.isActive = data.isActive;
         await workLeader.save();
 
         return WorkLeader.findByPk(id, {

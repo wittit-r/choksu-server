@@ -4,8 +4,9 @@
 
 ```
 PayPeriod:
-  OPEN ──export──▶ CLOSED ──reopen──▶ OPEN
+  OPEN ──close──▶ CLOSED ──reopen──▶ OPEN
   OPEN ──close(force)──▶ CLOSED
+  (export เปลี่ยนเฉพาะ Payroll PENDING → CALCULATED — ไม่กระทบสถานะรอบ)
 
 Payroll:
   PENDING ──export──▶ CALCULATED
@@ -86,8 +87,9 @@ PATCH /payrolls/:id แก้ไม่ได้เมื่อ: PAID, CANCELLED
 export แล้ว แต่มีพนักงานคนใหม่เข้ามา / กรอกเวลาเพิ่ม
 
 ```
-export แล้ว → payroll ทั้งหมด CALCULATED
+export แล้ว → payroll ทั้งหมด CALCULATED (รอบยัง OPEN)
   → กรอกเวลาเพิ่มให้พนักงานใหม่ → TimeSheet: FILLED, TimeEntry: DRAFT
+  → PATCH /pay-periods/:id/close → CLOSED
   → PATCH /pay-periods/:id/reopen
       period: CLOSED → OPEN
       (payroll เดิมยังคง CALCULATED ไม่เปลี่ยน)

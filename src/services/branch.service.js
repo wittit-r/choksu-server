@@ -89,8 +89,9 @@ class BranchService {
             throw err.notFound({ id });
         }
 
-        branch.name = data.name;
-        branch.fullname = data.fullname;
+        // อัปเดตเฉพาะฟิลด์ที่ส่งมา (กัน fullname หายเงียบๆ เมื่อ PATCH เฉพาะ name)
+        if (data.name !== undefined) branch.name = data.name;
+        if (data.fullname !== undefined) branch.fullname = data.fullname;
         await branch.save();
 
         return branch;

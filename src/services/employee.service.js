@@ -323,6 +323,10 @@ class EmployeeService {
      * @returns {Promise<Employee>} ข้อมูลพนักงานที่สร้างใหม่
      */
     async createEmployee({ firstName, lastName, idCard, phone, bankAccount, shiftType, workLeaderId, startDate }) {
+        // ตรวจสอบ idCard ซ้ำก่อนสร้าง (unique index → 409 แทน 500)
+        const existing = await Employee.findOne({ where: { idCard }, attributes: ["id"] });
+        if (existing) throw err.conflict({ idCard }, "เลขบัตรประชาชนนี้ถูกใช้งานแล้ว");
+
         const created = await Employee.create({
             firstName,
             lastName,
@@ -396,6 +400,15 @@ class EmployeeService {
 
         if (!employee) {
             throw err.notFound({ id });
+        }
+
+        // ตรวจสอบ idCard ซ้ำ (ไม่รวมตัวเอง)
+        if (idCard !== undefined) {
+            const existing = await Employee.findOne({
+                where: { idCard, id: { [Op.ne]: id } },
+                attributes: ["id"],
+            });
+            if (existing) throw err.conflict({ idCard }, "เลขบัตรประชาชนนี้ถูกใช้งานแล้ว");
         }
 
         // อัปเดตเฉพาะฟิลด์ที่ส่งมา
@@ -498,6 +511,11 @@ class EmployeeService {
 
         // ตรวจสอบ positionId มีอยู่จริง
         await this._validatePositionExists(positionId);
+
+        // ตรวจสอบช่วงวันที่ (เดียวกับ updateWage)
+        if (effectiveTo && new Date(effectiveTo) <= new Date(effectiveFrom)) {
+            throw err.validation({ effectiveFrom, effectiveTo }, "วันที่สิ้นสุดต้องมากกว่าวันที่เริ่มต้น");
+        }
 
         const wage = await WageRate.create({
             employeeId,

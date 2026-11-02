@@ -151,13 +151,12 @@ describe('Auth flows: login / me / refresh / logout', () => {
             });
             expect(session).toBeNull();
 
-            // FINDING (ล็อก behavior ปัจจุบัน): access token เดิมยังใช้ได้ต่อผ่าน redis cache
-            // (login เขียน key auth:access:* แบบ TTL 1 ชม. และการลบ session ใน flow นี้
-            // ไม่ลบ redis key) → 401 จะเกิดก็ต่อเมื่อ TTL หมดเท่านั้น
+            // (แก้แล้ว) refresh หมดอายุ → ล้าง redis key auth:access:* ของ user ด้วย
+            // → access token เดิมตายทันที ไม่ต้องรอ TTL
             const meRes = await api.raw
                 .get('/auth/me')
                 .set({ Authorization: `Bearer ${loginRes.body.data.accessToken}` });
-            expect(meRes.status).toBe(200);
+            expect(meRes.status).toBe(401);
         });
     });
 

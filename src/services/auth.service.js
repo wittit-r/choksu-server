@@ -111,6 +111,9 @@ class AuthService {
         if (new Date() > session.refreshExpiresAt) {
             // ลบ session ที่หมดอายุ
             await Session.destroy({ where: { id: session.id } });
+            // ล้าง access token ที่คงเหลือใน Redis ให้สิ้นสุดทันที (ไม่ต้องรอ TTL)
+            const staleKeys = await redis().keys(`${REDIS_ACCESS_PREFIX}${session.user.id}:*`);
+            if (staleKeys.length > 0) await redis().del(...staleKeys);
             throw err.unauthorized(null, 'Refresh token หมดอายุ กรุณาล็อกอินใหม่');
         }
 
