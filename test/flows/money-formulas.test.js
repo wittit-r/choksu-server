@@ -275,39 +275,17 @@ describe('Money Formulas — ล็อกสูตรคำนวณเงิน
         expect(after.summary.netPay).toBeCloseTo(190.64, 2);
     });
 
-    // POTENTIAL BUG (ล็อก behavior ปัจจุบันไว้กันกำกวม):
-    // createWorkerTimeSheet ไม่ได้สร้าง OVERTIME entry ให้อัตโนมัติเมื่อ pattern = { regular: true, ot: 1.5 }
-    // และไม่ reject combo นี้ (Joi รับ ot ทุกค่าไม่ดู regular) — entry เดียว workType REGULAR + otRate 1.5
-    // ถูกเก็บลง DB แต่ _calculateEntryAmount สาย REGULAR ไม่ใช้ otRate → OT หายเงียบๆ
-    // เทียบ: driver endpoint (validateWorkTypeRules) reject REGULAR+otRate>0 ด้วย 422
-    // ถ้าซ่อมเป็น reject ค่อยอัปเดต test นี้เป็น 422
-    it('behavior ปัจจุบัน: pattern { regular: true, ot: 1.5 } → entry REGULAR เดี่ยว OT ถูกเพิกเฉย', async () => {
-        const periodId = await createPeriod();
-        const emp = seed.employees[0];
-
+    // (แก้แล้วตาม business rule: คนงานลง regular และ OT แยกคนละใบเสมอ)
+    // combo regular + ot ในใบเดียว → reject 422 เหมือน driver (validateWorkTypeRules)
+    it('pattern { regular: true, ot: 1.5 } → 422 ต้องแยกใบระหว่าง regular และ OT', async () => {
         const sheetRes = await api.createWorkerTimeSheet({
             workLeaderId: seed.workLeader.id,
             workDate: '2025-06-02',
             pattern: { regular: true, ot: 1.5 },
-            entries: [{ employeeId: emp.id, timeIn: '08:00:00', timeOut: '17:00:00', shiftType: 'REGULAR' }],
+            entries: [{ employeeId: seed.employees[0].id, timeIn: '08:00:00', timeOut: '17:00:00', shiftType: 'REGULAR' }],
         });
-        expect(sheetRes.status).toBe(201);
-        expect(sheetRes.body.data.timeEntries).toHaveLength(1);
-
-        const entry = sheetRes.body.data.timeEntries[0];
-        expect(entry.workType).toBe('REGULAR');
-        expect(entry.otRate).toBe(1.5); // เก็บ rate ไว้แต่คำนวณไม่ใช้
-
-        await api.updateTimeSheet(sheetRes.body.data.id, { status: 'FILLED' });
-        const createRes = await api.createPayrolls(periodId);
-        expect(createRes.status).toBe(201);
-        expect(createRes.body.created).toBe(1);
-
-        // REGULAR 08:00–17:00 → 480 effective → 500 / ไม่มี OT เลย
-        const payroll = await getFirstPayroll(periodId);
-        expect(payroll.summary.regularAmount).toBeCloseTo(500, 2);
-        expect(payroll.summary.otAmount).toBe(0);
-        expect(payroll.summary.overtimeMinutes['1.5']).toBe(0);
-        expect(payroll.summary.netPay).toBeCloseTo(500, 2);
+        expect(sheetRes.status).toBe(422);
+        expect(sheetRes.body.error.code).toBe('VALIDATION_ERROR');
+        expect(sheetRes.body.error.details.message).toContain('แยกใบลงเวลา');
     });
 });

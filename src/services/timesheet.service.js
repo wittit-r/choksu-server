@@ -579,6 +579,14 @@ class TimeSheetService {
         }));
 
         // 4. Map pattern to workType
+        // Business rule: คนงานลงใบงาน regular และ OT แยกคนละใบเสมอ
+        // (เหมือน driver ที่ reject ผ่าน validateWorkTypeRules) — ห้ามใส่พร้อมกัน
+        if (pattern.regular && pattern.ot > 0) {
+            throw err.validation({
+                message: 'คนงานต้องแยกใบลงเวลาระหว่างงานปกติและ OT — ใช้ regular หรือ ot อย่างใดอย่างหนึ่งต่อใบ',
+                pattern,
+            });
+        }
         const workType = pattern.regular ? 'REGULAR' : 'OVERTIME';
         const otRate = pattern.ot || 0;
 
