@@ -8,6 +8,10 @@ import branchRoutes from "./branch.routes.js";
 import timesheetRoutes from "./timesheet.routes.js";
 import payPeriodRoutes from "./pay-period.routes.js";
 import payrollRoutes from "./payroll.routes.js";
+import holidayRoutes from "./holiday.routes.js";
+import leaveRoutes from "./leave.routes.js";
+import leaveTypeRoutes from "./leave-type.routes.js";
+import leaveEntitlementRoutes from "./leave-entitlement.routes.js";
 
 const router = express.Router();
 
@@ -37,5 +41,17 @@ router.use('/pay-periods', payPeriodRoutes);
 
 // Payroll routes
 router.use('/payrolls', payrollRoutes);
+
+// Holiday routes
+router.use('/holidays', holidayRoutes);
+
+// Leave routes
+router.use('/leaves', leaveRoutes);
+
+// Leave Type routes
+router.use('/leave-types', leaveTypeRoutes);
+
+// Leave Entitlement routes
+router.use('/leave-entitlements', leaveEntitlementRoutes);
 
 export default router;

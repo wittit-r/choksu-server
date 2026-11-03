@@ -188,6 +188,52 @@ export function createApiClient(accessToken) {
         createCorrectionTimeEntry: (sheetId, data) =>
             request(testServer).post(`/timesheets/${sheetId}/time-entries/correction`).send(data).set(authHeader),
 
+        // Holidays
+        getHolidays: (query = {}) =>
+            request(testServer).get('/holidays').query(query).set(authHeader),
+
+        createHoliday: (data) =>
+            request(testServer).post('/holidays').send(data).set(authHeader),
+
+        deleteHoliday: (id) =>
+            request(testServer).delete(`/holidays/${id}`).set(authHeader),
+
+        // Leave Types
+        getLeaveTypes: (query = {}) =>
+            request(testServer).get('/leave-types').query(query).set(authHeader),
+
+        createLeaveType: (data) =>
+            request(testServer).post('/leave-types').send(data).set(authHeader),
+
+        updateLeaveType: (id, data) =>
+            request(testServer).patch(`/leave-types/${id}`).send(data).set(authHeader),
+
+        deleteLeaveType: (id) =>
+            request(testServer).delete(`/leave-types/${id}`).set(authHeader),
+
+        // Leaves
+        getLeaves: (query = {}) =>
+            request(testServer).get('/leaves').query(query).set(authHeader),
+
+        getLeaveById: (id) =>
+            request(testServer).get(`/leaves/${id}`).set(authHeader),
+
+        createLeave: (data) =>
+            request(testServer).post('/leaves').send(data).set(authHeader),
+
+        deleteLeave: (id) =>
+            request(testServer).delete(`/leaves/${id}`).set(authHeader),
+
+        // Leave Entitlements
+        getEntitlements: (query = {}) =>
+            request(testServer).get('/leave-entitlements').query(query).set(authHeader),
+
+        updateEntitlement: (id, data) =>
+            request(testServer).patch(`/leave-entitlements/${id}`).send(data).set(authHeader),
+
+        generateEntitlements: (data) =>
+            request(testServer).post('/leave-entitlements/generate').send(data).set(authHeader),
+
         addFile: (sheetId, data) =>
             request(testServer).post(`/timesheets/${sheetId}/files`).send(data).set(authHeader),
 
