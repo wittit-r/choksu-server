@@ -283,7 +283,7 @@ class PayPeriodService {
             if (sheetsById.size > 0) {
                 throw err.conflict(
                     { pendingSheets: [...sheetsById.values()] },
-                    `มีใบลงเวลาที่ยังไม่ได้ตรวจสอบ (PENDING) ${sheetsById.size} ใบในรอบนี้ — ข้อมูลจะไม่ถูกนับในการทำจ่าย กรุณาตรวจสอบ (FILLED) ให้ครบก่อน หรือยืนยันทำจ่ายโดยไม่รวมใบเหล่านี้`,
+                    `มีใบลงเวลาค้างรอตรวจสอบ ${sheetsById.size} ใบ`,
                 );
             }
         }
