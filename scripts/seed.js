@@ -9,7 +9,7 @@
  * ข้อมูลอ้างอิง (สาขา/ตำแหน่ง/หัวหน้างาน) มาจากชุดจริงของโปรเจค
  * พนักงานตัวอย่าง 2 คนเป็นข้อมูลทดสอบ (นำหน้า SEED-) ลบออกได้ไม่กระทบอะไร
  */
-import { sequelize, Branch, Position, WorkLeader, User, Employee, WageRate } from "../src/database/index.js";
+import { sequelize, Branch, Position, WorkLeader, User, Employee, WageRate, Holiday, LeaveType } from "../src/database/index.js";
 import { hashPassword } from "../src/utils/password.js";
 
 const RESET = process.argv.includes("--reset") && process.argv.includes("--yes");
@@ -50,6 +50,45 @@ const WAGE_BY_CODE = {
     D01: { dailyRate: 650, hourlyRate: 81.25, minuteRate: 1.354, monthlyRate: 0 },
 };
 
+// ชนิดวันลา + สิทธิ์ default ต่อปี (แก้ไขได้ผ่านระบบ)
+const LEAVE_TYPES = [
+    { name: "ลาป่วย", defaultDaysPerYear: 30 },
+    { name: "พักร้อน", defaultDaysPerYear: 7 },
+    { name: "ลากิจ", defaultDaysPerYear: 3 },
+];
+
+// วันหยุดนักขัตฤกษ์ตัวอย่าง (วันตามราชการที่ตรงแน่) — แก้/เพิ่ม/ลบได้ผ่านระบบทุกปี
+// หมายเหตุ: วันจันทรคติ (มาฆบูชา/วิสาขบูชา/เข้าพรรษา/อาสาฬหบูชา) + หยุดชดเชจพิเศษของ กฟภ. ต้องใส่เพิ่มเองรายปี
+const HOLIDAYS = [
+    // 2026
+    { holidayDate: "2026-01-01", name: "วันปีใหม่" },
+    { holidayDate: "2026-04-06", name: "วันจักรี" },
+    { holidayDate: "2026-04-13", name: "วันสงกรานต์" },
+    { holidayDate: "2026-04-14", name: "วันสงกรานต์" },
+    { holidayDate: "2026-04-15", name: "วันสงกรานต์" },
+    { holidayDate: "2026-05-01", name: "วันแรงงานแห่งชาติ" },
+    { holidayDate: "2026-05-05", name: "วันฉัตรมงคล (ชดเชย)" },
+    { holidayDate: "2026-08-12", name: "วันแม่แห่งชาติ" },
+    { holidayDate: "2026-10-13", name: "วันนวมินทรมหาราช" },
+    { holidayDate: "2026-12-05", name: "วันพ่อแห่งชาติ" },
+    { holidayDate: "2026-12-07", name: "วันพ่อแห่งชาติ (ชดเชย)" },
+    { holidayDate: "2026-12-10", name: "วันรัฐธรรมนูญ" },
+    { holidayDate: "2026-12-31", name: "วันสิ้นปี" },
+    // 2027
+    { holidayDate: "2027-01-01", name: "วันปีใหม่" },
+    { holidayDate: "2027-04-06", name: "วันจักรี" },
+    { holidayDate: "2027-04-13", name: "วันสงกรานต์" },
+    { holidayDate: "2027-04-14", name: "วันสงกรานต์" },
+    { holidayDate: "2027-04-15", name: "วันสงกรานต์" },
+    { holidayDate: "2027-05-03", name: "วันแรงงานแห่งชาติ (ชดเชย)" },
+    { holidayDate: "2027-05-05", name: "วันฉัตรมงคล (ชดเชย)" },
+    { holidayDate: "2027-08-12", name: "วันแม่แห่งชาติ" },
+    { holidayDate: "2027-10-13", name: "วันนวมินทรมหาราช" },
+    { holidayDate: "2027-12-06", name: "วันพ่อแห่งชาติ (ชดเชย)" },
+    { holidayDate: "2027-12-10", name: "วันรัฐธรรมนูญ" },
+    { holidayDate: "2027-12-31", name: "วันสิ้นปี" },
+];
+
 const run = async () => {
     await sequelize.authenticate();
 
@@ -58,6 +97,7 @@ const run = async () => {
         await sequelize.query("SET FOREIGN_KEY_CHECKS = 0");
         for (const t of ["audit_logs", "invoice_relates", "invoices", "invoice_periods", "bill_rates",
             "payroll_relates", "payrolls", "time_entries", "time_sheets", "wage_rates",
+            "leave_entitlements", "leaves", "leave_types", "holidays",
             "employees", "sessions", "users", "work_leaders", "contracts", "positions", "branches"]) {
             await sequelize.query(`DELETE FROM ${t}`);
             await sequelize.query(`ALTER TABLE ${t} AUTO_INCREMENT = 1`);
@@ -95,6 +135,24 @@ const run = async () => {
         });
     }
     console.log("work_leaders:", await WorkLeader.count());
+
+    // ชนิดวันลา + วันหยุดนักขัตฤกษ์
+    for (const lt of LEAVE_TYPES) {
+        await LeaveType.findOrCreate({ where: { name: lt.name }, defaults: { ...lt, isActive: true } });
+    }
+    console.log("leave_types:", await LeaveType.count());
+
+    for (const h of HOLIDAYS) {
+        // numeric-local constructor → เที่ยงคืนเวลาไทยตรงๆ ไม่ขึ้นกับ TZ env
+        // (string "T00:00:00" ถูก parse เป็น UTC เมื่อไม่มี TZ=Asia/Bangkok → เก็บเพี้ยน 07:00)
+        const [y, mo, d] = h.holidayDate.split("-").map(Number);
+        const holidayDate = new Date(y, mo - 1, d);
+        await Holiday.findOrCreate({
+            where: { holidayDate },
+            defaults: { holidayDate, name: h.name },
+        });
+    }
+    console.log("holidays:", await Holiday.count());
 
     // พนักงานตัวอย่าง + ค่าแรง
     const wl = await WorkLeader.findOne();

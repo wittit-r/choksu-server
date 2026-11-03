@@ -223,6 +223,60 @@ export const defineModels = (sequelize) => {
         ],
     });
 
+    // ─── วันลา / วันหยุด ─────────────────────────────────
+    const Holiday = sequelize.define("Holiday", {
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+        holidayDate: { type: DataTypes.DATE, allowNull: false },
+        name: { type: DataTypes.TEXT, allowNull: false },
+    }, {
+        tableName: "holidays",
+        underscored: true,
+        indexes: [{ unique: true, fields: ["holiday_date"] }],
+    });
+
+    const LeaveType = sequelize.define("LeaveType", {
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+        name: { type: DataTypes.STRING(100), allowNull: false },
+        defaultDaysPerYear: { type: DataTypes.INTEGER, allowNull: false },
+        isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    }, {
+        tableName: "leave_types",
+        underscored: true,
+        indexes: [{ unique: true, fields: ["name"] }, { fields: ["is_active"] }],
+    });
+
+    const Leave = sequelize.define("Leave", {
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+        employeeId: { type: DataTypes.INTEGER, allowNull: false },
+        leaveTypeId: { type: DataTypes.INTEGER, allowNull: false },
+        startTime: { type: DataTypes.DATE, allowNull: false },
+        endTime: { type: DataTypes.DATE, allowNull: false },
+        note: { type: DataTypes.TEXT },
+        createBy: { type: DataTypes.INTEGER },
+    }, {
+        tableName: "leaves",
+        underscored: true,
+        indexes: [
+            { fields: ["employee_id", "start_time"] },
+            { fields: ["leave_type_id"] },
+        ],
+    });
+
+    const LeaveEntitlement = sequelize.define("LeaveEntitlement", {
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+        employeeId: { type: DataTypes.INTEGER, allowNull: false },
+        year: { type: DataTypes.INTEGER, allowNull: false },
+        leaveTypeId: { type: DataTypes.INTEGER, allowNull: false },
+        entitledDays: { type: DataTypes.INTEGER, allowNull: false },
+    }, {
+        tableName: "leave_entitlements",
+        underscored: true,
+        indexes: [
+            { unique: true, name: "uq_leave_entitlements_scope", fields: ["employee_id", "year", "leave_type_id"] },
+            { fields: ["year"] },
+        ],
+    });
+
     // ─── Payroll ─────────────────────────────────────────
     const Payroll = sequelize.define("Payroll", {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
@@ -360,6 +414,16 @@ export const defineModels = (sequelize) => {
     PayrollRelate.belongsTo(TimeEntry, { as: "timeEntry", foreignKey: "timeEntryId", onDelete: "RESTRICT" });
     TimeEntry.hasMany(PayrollRelate, { as: "payrollRelates", foreignKey: "timeEntryId", onDelete: "RESTRICT" });
 
+    // leaves / leave_types / leave_entitlements / holidays
+    Employee.hasMany(Leave, { as: "leaves", foreignKey: "employeeId", onDelete: "CASCADE" });
+    Leave.belongsTo(Employee, { as: "employee", foreignKey: "employeeId", onDelete: "CASCADE" });
+    LeaveType.hasMany(Leave, { as: "leaves", foreignKey: "leaveTypeId", onDelete: "RESTRICT" });
+    Leave.belongsTo(LeaveType, { as: "leaveType", foreignKey: "leaveTypeId", onDelete: "RESTRICT" });
+    Employee.hasMany(LeaveEntitlement, { as: "leaveEntitlements", foreignKey: "employeeId", onDelete: "CASCADE" });
+    LeaveEntitlement.belongsTo(Employee, { as: "employee", foreignKey: "employeeId", onDelete: "CASCADE" });
+    LeaveType.hasMany(LeaveEntitlement, { as: "leaveEntitlements", foreignKey: "leaveTypeId", onDelete: "RESTRICT" });
+    LeaveEntitlement.belongsTo(LeaveType, { as: "leaveType", foreignKey: "leaveTypeId", onDelete: "RESTRICT" });
+
     // sessions
     User.hasMany(Session, { as: "sessions", foreignKey: "userId", onDelete: "CASCADE" });
     Session.belongsTo(User, { as: "user", foreignKey: "userId", onDelete: "CASCADE" });
@@ -375,6 +439,7 @@ export const defineModels = (sequelize) => {
     return {
         Branch, Position, Contract, PayPeriod, User, Session, AuditLog,
         WorkLeader, Employee, WageRate, BillRate, TimeSheet, TimeEntry,
+        Holiday, LeaveType, Leave, LeaveEntitlement,
         Payroll, PayrollRelate, InvoicePeriod, Invoice, InvoiceRelate,
     };
 };
