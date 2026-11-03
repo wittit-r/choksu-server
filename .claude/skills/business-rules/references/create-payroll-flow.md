@@ -102,3 +102,13 @@ PAY-{year}-{periodNo 2 หลัก}-{seq 3 หลัก}
 
 - PayPeriod ต้องเป็น CLOSED
 - อัปเดต status → OPEN
+
+---
+
+## การคัดคนเข้า payroll (Payroll leave v2 — พ.ย. 2026)
+
+- **WORKER**: candidates = คนที่มี TimeEntry ในรอบ **∪ คนที่มีวันลาในรอบ**
+  (ลาเต็มรอบไม่มาทำงานก็ต้องได้ payroll — จ่ายผ่าน leaveOnlyAmount)
+- **DRIVER**: candidates = พนักงาน active ที่มี WageRate ตรงประเภท + startDate ≤ endDate ของรอบ
+  **ทุกคน** (เงินเดือนรายเดือน — ไม่มี entry = ขาดทั้งรอบ โดนหักจน clamp 0)
+- Worker ที่ allEntries ว่างแต่มีวันลา → สร้าง payroll ด้วย relates ว่างได้

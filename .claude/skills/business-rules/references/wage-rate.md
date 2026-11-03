@@ -38,3 +38,11 @@
   - อยู่ใน `src/services/pay-period.service.js`
 - `_getPrimaryWageRates(employeeIds, periodStartDate)` — ดึง rate หลักสำหรับ summary
   - เลือก rate ล่าสุด (orderBy effectiveFrom desc) ที่มีผลในวัน periodStartDate
+
+## การใช้ rate ในสูตร v2 (Payroll leave v2)
+
+- **WORKER**: rate รายวันจาก Map (date → WageRate) — ค่าจ้างวันนั้นใช้ rate ของวันนั้น
+- **DRIVER**: monthlyRate + rate สำหรับสูตรหักย่อยหน่วย ใช้ **rate ณ วันสุดท้ายของรอบ** (endRate)
+- **เข้าใหม่กลางเดือน (โหมด DAILY)**: คิดรายวันด้วย rate ของแต่ละวัน
+- การเทียบ coverage ใน `_getWageRatesByDate` เป็น**ระดับวันที่** (string YYYY-MM-DD) —
+  ทนต่อค่าที่ถูกเก็บ skew 07:00 (ISO date-only ผ่าน UTC) อย่าใช้เทียบ timestamp ตรงๆ
