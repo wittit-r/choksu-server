@@ -7,14 +7,27 @@ import err from "../utils/error.js";
  */
 class LeaveTypeService {
     /**
-     * รายการชนิดวันลา
+     * รายการชนิดวันลา (paginated)
      * @param {Object} params
      * @param {boolean} [params.isActive] - กรองเฉพาะใช้งาน/ไม่ใช้งาน
+     * @param {number} [params.page=1]
+     * @param {number} [params.limit=10]
      */
-    async getLeaveTypes({ isActive } = {}) {
+    async getLeaveTypes({ isActive, page = 1, limit = 10 } = {}) {
         const where = {};
         if (isActive !== undefined) where.isActive = isActive;
-        return LeaveType.findAll({ where, order: [["id", "ASC"]] });
+
+        const { rows: data, count: total } = await LeaveType.findAndCountAll({
+            where,
+            offset: (page - 1) * limit,
+            limit,
+            order: [["id", "ASC"]],
+        });
+
+        return {
+            data,
+            pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        };
     }
 
     async getLeaveTypeById({ id }) {

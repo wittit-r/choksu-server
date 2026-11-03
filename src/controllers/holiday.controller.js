@@ -7,12 +7,14 @@ class HolidayController {
             req.query,
             Joi.object({
                 year: Joi.number().integer().min(1900).max(3000),
+                page: Joi.number().integer().min(1).default(1),
+                limit: Joi.number().integer().min(1).max(100).default(10),
             }),
         );
 
-        const data = await holidayService.getHolidays(query);
+        const { data, pagination } = await holidayService.getHolidays(query);
 
-        res.status(200).json({ success: true, data });
+        res.status(200).json({ success: true, data, pagination });
     };
 
     createHoliday = async (req, res) => {

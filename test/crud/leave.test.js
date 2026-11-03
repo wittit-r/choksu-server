@@ -70,15 +70,16 @@ describe('CRUD: leaves / leave-types / leave-entitlements / holidays', () => {
     };
 
     describe('holidays', () => {
-        it('should create + list by year + delete', async () => {
+        it('should create + list by year (paginated) + delete', async () => {
             const created = await api.createHoliday({ date: '2026-12-05', name: 'วันพ่อ' });
             expect(created.status).toBe(201);
             await api.createHoliday({ date: '2027-01-01', name: 'วันปีใหม่' });
 
-            const y2026 = await api.getHolidays({ year: 2026 });
+            const y2026 = await api.getHolidays({ year: 2026, page: 1, limit: 10 });
             expect(y2026.status).toBe(200);
             expect(y2026.body.data).toHaveLength(1);
             expect(y2026.body.data[0].name).toBe('วันพ่อ');
+            expect(y2026.body.pagination).toMatchObject({ page: 1, limit: 10, total: 1, totalPages: 1 });
 
             const del = await api.deleteHoliday(created.body.data.id);
             expect(del.status).toBe(200);

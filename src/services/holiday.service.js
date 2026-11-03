@@ -8,11 +8,13 @@ import err from "../utils/error.js";
  */
 class HolidayService {
     /**
-     * ดึงรายการวันหยุดตามปี
+     * ดึงรายการวันหยุดตามปี (paginated)
      * @param {Object} params
      * @param {number} [params.year] - ปีที่ต้องการ (ค่าเริ่มต้น = ทุกปี)
+     * @param {number} [params.page=1]
+     * @param {number} [params.limit=10]
      */
-    async getHolidays({ year } = {}) {
+    async getHolidays({ year, page = 1, limit = 10 } = {}) {
         const where = {};
         if (year) {
             where.holidayDate = {
@@ -20,7 +22,18 @@ class HolidayService {
                 [Op.lt]: new Date(year + 1, 0, 1),
             };
         }
-        return Holiday.findAll({ where, order: [["holidayDate", "ASC"]] });
+
+        const { rows: data, count: total } = await Holiday.findAndCountAll({
+            where,
+            offset: (page - 1) * limit,
+            limit,
+            order: [["holidayDate", "ASC"]],
+        });
+
+        return {
+            data,
+            pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        };
     }
 
     /**

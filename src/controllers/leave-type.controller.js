@@ -7,12 +7,14 @@ class LeaveTypeController {
             req.query,
             Joi.object({
                 isActive: Joi.boolean(),
+                page: Joi.number().integer().min(1).default(1),
+                limit: Joi.number().integer().min(1).max(100).default(10),
             }),
         );
 
-        const data = await leaveTypeService.getLeaveTypes(query);
+        const { data, pagination } = await leaveTypeService.getLeaveTypes(query);
 
-        res.status(200).json({ success: true, data });
+        res.status(200).json({ success: true, data, pagination });
     };
 
     getLeaveTypeById = async (req, res) => {
