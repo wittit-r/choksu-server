@@ -1,10 +1,10 @@
 # Spec (DRAFT): ระบบจ่ายเงิน v2 + การลา + ปฏิทินวันหยุด
 
 > **สถานะ:** ตัดสินครบแล้ว **ยกเว้นเรื่องลาออก (แยกเป็น Phase 2 — ไม่ block v1)** (สนทนา 3 พ.ย. 2026)
-> **แผนอนุมัติแล้ว** — ดู [PAYROLL-LEAVE-PLAN.md](PAYROLL-LEAVE-PLAN.md) · **scope v1 = ฝั่งจ่ายเงินให้พนักงานเท่านั้น** (ฝั่งเบิก/contract price = อนาคต)
-> ลำดับงาน: **backend ครบก่อน → frontend ทีเดียวท้ายสุด**
+> **แผนอนุมัติแล้ว และ implement เสร็จครบ Phase 1-5** (3 พ.ย. 2026 — tests 131/131 + browser E2E ผ่าน) — ดู log ท้าย [PAYROLL-LEAVE-PLAN.md](PAYROLL-LEAVE-PLAN.md)
+> **scope v1 = ฝั่งจ่ายเงินให้พนักงานเท่านั้น** (ฝั่งเบิก/contract price = อนาคต)
 >
-> เมื่อ implement เสร็จ: ต้องเสนอ diff อัปเดต `/business-rules` skill ให้ตรงระบบใหม่ (รอ user ยืนยันก่อนแก้)
+> เหลือ: อัปเดต `/business-rules` skill ให้ตรงระบบใหม่ (รอ user ยืนยัน diff)
 
 ## ที่มา — โค้ดปัจจุบัน (ณ develop, พ.ย. 2026)
 

@@ -1,6 +1,6 @@
 # แผน Implement — Payroll v2 + ระบบวันลา + ปฏิทินวันหยุด (v1)
 
-> **สถานะ: อนุมัติแล้ว** (3 พ.ย. 2026)
+> **สถานะ: อนุมัติแล้ว** (3 พ.ย. 2026) — **implement เสร็จครบ Phase 1-5 แล้ววันเดียวกัน**
 > **Spec อ้างอิง:** [PAYROLL-LEAVE-SPEC-DRAFT.md](PAYROLL-LEAVE-SPEC-DRAFT.md) (ตัดสินครบ + ตัวอย่างแผ่นจ่ายจริง/golden cases อยู่ในนั้นแล้ว)
 >
 > 1. อ่าน spec ก่อนเริ่มทุก phase — โดยเฉพาะ section B (validation) C (worker) D (driver)
@@ -124,3 +124,9 @@ LeaveEntitlement  id, employeeId FK, year INT, leaveTypeId FK, entitledDays INT
 | วันที่ | ขั้น | ผล | หมายเหตุ |
 |---|---|---|---|
 | 2026-11-03 | Step 0 | ✅ ย้ายแผ่นจ่ายจริงเข้า spec + แก้ 16,034→16,304 + sync แผน | — |
+| 2026-11-03 | Phase 1 | ✅ 4 models + seed (leave_types 3, holidays 25) — `npm test` 96/96 เขียว | เจอและแก้: string `T00:00:00` ถูก parse เป็น UTC เมื่อไม่มี TZ env → เก็บ 07:00 — เปลี่ยนเป็น numeric-local constructor แล้ว เก็บ `00:00:00` เป๊ะ |
+| 2026-11-03 | Phase 2 | ✅ util `effectiveMinutes` + services/controllers/routes (holidays, leave-types, leaves, leave-entitlements) + validation 7 ข้อ — `npm test` 115/115 | สมมุติฐานที่ตัดสิน: 1 รายการลา = 1 วัน (ลาหลายวัน = หลายรายการ); พบว่ากติกา ≤480 มีผลจริงเฉพาะพนักงานกะ (พนักงานปกติ 08:00–17:00 รวมไม่พ้น 480 ทางโครงสร้าง) |
+| 2026-11-03 | Phase 3 | ✅ worker คิดค่าจ้างต่อวัน + holiday pay + leave-only payroll + ห้าม pattern ปกติวันนักขัตฤกษ์ — `npm test` 124/124 | สถาปัตยกรรมที่ตัดสิน: holiday pay และค่าจ่ายวันลา (ไม่มี entry) คำนวณสดตอนอ่านสรุปยอด; นาทีลาวันที่มี entry top-up เข้า paidValue ตอนทำจ่าย; คนมีแต่วันลา (ไม่มี entry) ก็เกิด payroll |
+| 2026-11-03 | Phase 4 | ✅ driver = monthlyRate − หักย่อยหน่วย + โหมดรายวันเข้าใหม่ + clamp 0 + OT นอก 08:00–17:00 จ–ส — **golden cases แผ่นจริง 4 รายผ่านครบ** `npm test` 131/131 | แก้ bug เก่า 2 ตัวระหว่างทาง: (1) PayPeriod endDate ถูก Joi parse เป็น UTC → เก็บ 07:00 และ `[lte endDate]` ทำ entry วันสุดท้ายของรอบหลุด — เปลี่ยนเป็น string+เที่ยงคืนไทย และ `[lt nextMidnight]` ทุกจุด (2) `_getWageRatesByDate` เทียบ timestamp ไม่ทน skew — เปลี่ยนเป็นเทียบระดับวันที่ |
+| 2026-11-03 | Phase 5 | ✅ frontend ครบ: หน้าลงวันลา (บันทึก/ยอดสิทธิ์/ลบ) + วันหยุดนักขัตฤกษ์ + ชนิดวันลา/สิทธิ์ (generate/แก้รายคน) + payroll detail columns ใหม่ — build ผ่าน + browser ครบทุกหน้า | วงจรจริงบน browser: login → เลือกพนักงาน → บันทึกลาป่วยทั้งวัน → สิทธิ์ลด 30→29 (คำนวณสด) ✓ |
+| 2026-11-03 | Phase 5 (E2E) | ✅ รอบจ่ายจริงบน dev DB: driver ต.ค. 2026 ลงเวลาครบ 27 วัน + ที่พัก 2 คืน → **netPay 18,084 = golden นายทดสอบเป๊ะ** | driver migrate จริง 2 คน (ไม่มีใบลงเวลา) ถูกนับขาด 26 วันและหักย่อยหน่วยถูกต้อง — dev DB ถูกแตะ: wage คนขับ01 + วันลา 1 รายการ + รอบจ่าย id 264 (dev-only ตามกติกา reset ได้) |
