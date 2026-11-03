@@ -46,7 +46,7 @@ describe('Flow: Driver — ลงเวลารายเดือนและ�
             dailyRate: 500,
             hourlyRate: 62.5,
             minuteRate: 1.042,
-            monthlyRate: 0,
+            monthlyRate: 15000,
             effectiveFrom: new Date('2026-01-01'),
         });
         driver = { position: driverPosition, employee: driverEmployee };
@@ -58,32 +58,40 @@ describe('Flow: Driver — ลงเวลารายเดือนและ�
     });
 
     it('สร้างใบลงเวลารายเดือน → FILLED → รอบจ่าย DRIVER → ยอดถูกต้อง', async () => {
+        // พ.ย. 2026: อาทิตย์ 5 วัน (1,8,15,22,29) → วัน จ–ส 25 วัน — ลงครบทุกวัน + ค่าที่พัก 1 คืน
+        const entries = [];
+        for (let d = 2; d <= 30; d++) {
+            const date = new Date(2026, 10, d);
+            if (date.getDay() === 0) continue;
+            entries.push({
+                date: `2026-11-${String(d).padStart(2, '0')}`,
+                timeIn: '08:00:00', timeOut: '17:00:00',
+                workType: 'REGULAR', otRate: 0, accommodation: 0,
+            });
+        }
+        entries.push({ date: '2026-11-02', timeIn: null, timeOut: null, workType: 'ACCOMMODATION', otRate: 0, accommodation: 300 });
+
         // 1. สร้างใบลงเวลาคนขับ (รายเดือน)
         const sheetRes = await api.createDriverTimeSheet({
             employeeId: driver.employee.id,
             monthPeriod: '2026-11',
             allowDuplicate: false,
-            entries: [
-                { date: '2026-11-02', timeIn: '08:00:00', timeOut: '17:00:00', workType: 'REGULAR', otRate: 0, accommodation: 0 },
-                { date: '2026-11-03', timeIn: '08:00:00', timeOut: '17:00:00', workType: 'REGULAR', otRate: 0, accommodation: 0 },
-                // ค่าที่พัก (ไม่มีเวลา)
-                { date: '2026-11-02', timeIn: null, timeOut: null, workType: 'ACCOMMODATION', otRate: 0, accommodation: 300 },
-            ],
+            entries,
         });
         expect(sheetRes.status).toBe(201);
         const sheet = sheetRes.body.data;
-        expect(sheet.timeEntries).toHaveLength(3);
+        expect(sheet.timeEntries).toHaveLength(26);
 
-        // 2. เปลี่ยนสถานะเป็ FILLED
+        // 2. เปลี่ยนสถานะเป็น FILLED
         await api.updateTimeSheet(sheet.id, { status: 'FILLED' });
 
-        // 3. สร้างรอบจ่ายประเภท DRIVER
+        // 3. สร้างรอบจ่ายประเภท DRIVER (รายเดือนเต็มเดือน)
         const periodRes = await api.createPayPeriod({
-            periodNo: 1,
+            periodNo: 11,
             year: 2026,
             employeeType: 'DRIVER',
             startDate: '2026-11-01',
-            endDate: '2026-11-15',
+            endDate: '2026-11-30',
         });
         expect(periodRes.status).toBe(201);
         const periodId = periodRes.body.data.id;
@@ -93,13 +101,19 @@ describe('Flow: Driver — ลงเวลารายเดือนและ�
         expect(payrollRes.status).toBe(201);
         expect(payrollRes.body.created).toBe(1);
 
-        // 5. ตรวจยอด: งานปกติ 2 วัน (หักพักกลางวัน 480 นาที/วัน) + ค่าที่พัก 300
+        // 5. ตรวจยอด (สูตรใหม่ spec section D): มาครบทุกวัน จ–ส → ไม่ขาด
+        //    basePay = monthlyRate 15,000 + ค่าที่พัก 300 → netPay 15,300
         const detailRes = await api.getPayPeriodById(periodId);
         expect(detailRes.status).toBe(200);
         const p = detailRes.body.data.payrolls[0];
-        expect(p.summary.regularAmount).toBe(1000);
+        expect(p.summary.payMode).toBe('MONTHLY');
+        expect(p.summary.monthlyRate).toBe(15000);
+        expect(p.summary.absentMinutes).toBe(0);
+        expect(p.summary.absenceDeduction).toBe(0);
+        expect(p.summary.basePay).toBe(15000);
+        expect(p.summary.regularAmount).toBe(15000);
         expect(p.summary.accommodationAmount).toBe(300);
-        expect(p.summary.workingDays).toBe(2);
-        expect(p.summary.netPay).toBe(1300);
+        expect(p.summary.workingDays).toBe(25);
+        expect(p.summary.netPay).toBe(15300);
     });
 });

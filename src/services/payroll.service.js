@@ -2,6 +2,7 @@ import { Op } from "sequelize";
 
 import { sequelize, Payroll, PayrollRelate, TimeEntry } from "../database/index.js";
 import err from "../utils/error.js";
+import { nextMidnight } from "../utils/date.js";
 import employeeService from "./employee.service.js";
 import payPeriodService from "./pay-period.service.js";
 
@@ -178,7 +179,7 @@ class PayrollService {
             const inRangeEntries = await TimeEntry.findAll({
                 where: {
                     employeeId: payroll.employeeId,
-                    startTime: { [Op.gte]: startDate, [Op.lte]: endDate },
+                    startTime: { [Op.gte]: startDate, [Op.lt]: nextMidnight(endDate) },
                 },
                 include: {
                     association: 'timeSheet',

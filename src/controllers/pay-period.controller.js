@@ -27,12 +27,15 @@ class PayPeriodController {
     };
 
     createPayPeriod = async (req, res) => {
+        // รับเป็น string "YYYY-MM-DD" แล้วแปลงเป็นเที่ยงคืนเวลาไทยใน service
+        // (Joi .date().iso() parse date-only เป็น UTC เที่ยงคืน → เก็บเพี้ยน 07:00
+        //  ทำให้ entry วันสุดท้ายของรอบหลุดเงื่อนไข [lte endDate])
         const body = validate(req.body, Joi.object({
             periodNo: Joi.number().integer().min(1).max(24).required(),
             year: Joi.number().integer().min(2000).max(2100).required(),
             employeeType: Joi.string().valid('WORKER', 'DRIVER').required(),
-            startDate: Joi.date().iso().required(),
-            endDate: Joi.date().iso().required().greater(Joi.ref('startDate')),
+            startDate: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
+            endDate: Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
         }));
 
         const data = await payPeriodService.createPayPeriod(body);

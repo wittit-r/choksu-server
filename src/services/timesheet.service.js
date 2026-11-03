@@ -126,6 +126,43 @@ class TimeSheetService {
      * @param {Date|null} endTime - เวลาสิ้นสุด (null ถ้าไม่มี)
      * @throws {HttpError} ถ้าไม่ผ่าน validation
      */
+    /**
+     * Business rule (spec section D): OT ของ driver มีได้เฉพาะ "นอก" เวลาทำงานปกติ
+     * 08:00–17:00 ของวัน จันทร์–เสาร์ — วันอาทิตย์/นักขัตฤกษ์ไม่มีเวลาปกติ OT ได้ทุกช่วง
+     * @param {Date} startTime
+     * @param {Date} endTime
+     */
+    async _validateDriverOtWindow(startTime, endTime) {
+        if (startTime.getDay() === 0) return;
+
+        const holiday = await Holiday.findOne({
+            where: {
+                holidayDate: new Date(
+                    startTime.getFullYear(), startTime.getMonth(), startTime.getDate(),
+                ),
+            },
+            attributes: ['id'],
+        });
+        if (holiday) return;
+
+        const WORK_START = 8 * 60;
+        const WORK_END = 17 * 60;
+        const inMin = startTime.getHours() * 60 + startTime.getMinutes();
+        const outMin = endTime.getHours() * 60 + endTime.getMinutes();
+
+        // คร่อมข้ามวัน: ส่วนก่อนเที่ยงคืนต้องเริ่มหลัง 17:00 แล้วเท่านั้น
+        const overlaps = outMin < inMin
+            ? inMin < WORK_END
+            : !(outMin <= WORK_START || inMin >= WORK_END);
+
+        if (overlaps) {
+            throw err.validation(
+                { timeIn: toLocalTime(startTime), timeOut: toLocalTime(endTime) },
+                'OT ของคนขับรถต้องอยู่นอกช่วงเวลาทำงานปกติ 08:00–17:00 (จันทร์–เสาร์) — วันอาทิตย์/นักขัตฤกษ์ OT ได้ทุกช่วง',
+            );
+        }
+    }
+
     _validateWorkTypeRules(data, startTime, endTime) {
         const workType = data.workType || 'REGULAR';
         const otRate = data.otRate ?? 0;
@@ -701,6 +738,13 @@ class TimeSheetService {
         const timeEntries = entriesWithDateTime.filter((e) => e.workType !== 'ACCOMMODATION');
         const accommodationEntries = entriesWithDateTime.filter((e) => e.workType === 'ACCOMMODATION');
 
+        // 3.5 OT ของ driver ต้องอยู่นอกเวลาทำงานปกติ 08:00–17:00 จ–ส (spec section D)
+        for (const entry of timeEntries) {
+            if (entry.workType === 'OVERTIME') {
+                await this._validateDriverOtWindow(entry.startTime, entry.endTime);
+            }
+        }
+
         // 4. Validate overlaps (reuse existing function)
         if (timeEntries.length > 0) {
             await this._validateNoOverlaps(
@@ -1181,6 +1225,9 @@ class TimeSheetService {
 
             // Validate workType rules
             this._validateWorkTypeRules(data, startTime, endTime);
+            if (data.workType === 'OVERTIME') {
+                await this._validateDriverOtWindow(startTime, endTime);
+            }
 
             // Create entry
             const entry = await TimeEntry.create({
@@ -1295,6 +1342,9 @@ class TimeSheetService {
         };
 
         this._validateWorkTypeRules(mergedData, finalStartTime, finalEndTime);
+        if (mergedData.workType === 'OVERTIME' && finalStartTime && finalEndTime) {
+            await this._validateDriverOtWindow(finalStartTime, finalEndTime);
+        }
 
         // 5. Update
         if (Object.keys(updateData).length > 0) {

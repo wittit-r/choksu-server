@@ -68,4 +68,24 @@ const formatMinutesToHours = (minutes) => {
     return `${hours}:${String(mins).padStart(2, '0')}`;
 };
 
-export { combineDateAndTime, toLocalDate, toLocalTime, formatMinutesToHours };
+/**
+ * เที่ยงคืนของ "วันถัดไป" — ใช้เป็นขอบเขต exclusive ของช่วงวันที่
+ * (เทียบกับเวลา entry/leave ต้องใช้ [lt nextMidnight(endDate)] ไม่ใช่ [lte endDate]
+ *  เพราะ endDate เก็บเที่ยงคืน — entry วันสุดท้าย 08:00 จะหลุดถ้าใช้ lte)
+ * @param {Date|string} date - Date object หรือ string YYYY-MM-DD
+ * @returns {Date}
+ */
+const nextMidnight = (date) => {
+    let year, month, day;
+    if (typeof date === 'string') {
+        [year, month, day] = date.split('-').map(Number);
+        month -= 1;
+    } else {
+        year = date.getFullYear();
+        month = date.getMonth();
+        day = date.getDate();
+    }
+    return new Date(year, month, day + 1);
+};
+
+export { combineDateAndTime, toLocalDate, toLocalTime, formatMinutesToHours, nextMidnight };
