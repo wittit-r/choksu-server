@@ -156,7 +156,7 @@ class PayPeriodService {
         return payPeriod.toJSON();
     }
 
-    async createPayrollsForPeriod(payPeriodId, { employeeId: targetEmployeeId } = {}) {
+    async createPayrollsForPeriod(payPeriodId, { employeeId: targetEmployeeId, allowPendingSheets = false } = {}) {
         const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
         if (payPeriod.status !== 'OPEN') {
@@ -222,12 +222,6 @@ class PayPeriodService {
             }
         }
 
-        // DRIVER เป็นเงินเดือนรายเดือน — พนักงาน active ที่มี wageRate ในรอบ ได้ payroll ทุกคน
-        // แม้ไม่มี time entry เลย (เงินพื้นฐาน monthlyRate ส่วนการขาดคิดจากสูตรรายเดือน)
-        if (employeeType !== 'DRIVER' && candidateEmployeeIds.length === 0) {
-            return { created: 0, skipped: 0, payrolls: [] };
-        }
-
         // 2. filter เฉพาะ employee ที่ตรงกับ employeeType
         // (แทน wageRates { some: { position: { employeeType } } } — ดึง position ids ก่อน
         //  แล้วกรอง positionId IN (...) ตาม pattern ของ employee.service เพื่อเลี่ยง
@@ -236,6 +230,69 @@ class PayPeriodService {
             where: { employeeType },
             attributes: ['id'],
         });
+
+        // 2.5 กันใบลงเวลาค้าง PENDING — entry ของใบ PENDING จะ "ไม่ถูกนับ" ตอนทำจ่าย
+        // (driver = ถูกนับขาดทั้งรอบ, worker = วันนั้นหายเงียบๆ)
+        // เตือนก่อนเสมอ ยกเว้นยืนยันข้ามด้วย allowPendingSheets (pattern เดียวกับ allowDuplicate)
+        // หมายเหตุ: เจ้าของใบ PENDING อาจไม่อยู่ใน candidate pool (candidate มาจากใบ FILLED)
+        // จึงเช็คทุกใบ PENDING ในช่วงรอบที่เจ้าของมี wageRate ตรงประเภทของรอบนี้
+        // และต้องเช็ค "ก่อน" early-return ของ candidate ว่าง (มิฉะนั้นใบค้างจะหลุดไปเงียบๆ)
+        if (!allowPendingSheets) {
+            const pendingRows = await TimeEntry.findAll({
+                where: {
+                    isNegative: false,
+                    isRetro: false,
+                    startTime: { [Op.gte]: startDate, [Op.lt]: nextMidnight(endDate) },
+                },
+                attributes: ['employeeId', 'timeSheetId'],
+                include: [
+                    {
+                        association: 'timeSheet',
+                        attributes: ['id', 'sheetType', 'workDate', 'monthPeriod'],
+                        where: { status: 'PENDING' },
+                        required: true,
+                    },
+                    {
+                        association: 'employee',
+                        attributes: ['id', 'firstName', 'lastName'],
+                        required: true,
+                        include: {
+                            association: 'wageRates',
+                            // ห้ามใช้ attributes: [] กับ include ระดับกลาง — Sequelize ทิ้งทั้ง branch
+                            attributes: ['id'],
+                            required: true,
+                            where: { positionId: { [Op.in]: positionRows.map((p) => p.id) } },
+                        },
+                    },
+                ],
+            });
+
+            const sheetsById = new Map();
+            for (const row of pendingRows) {
+                const sheet = row.timeSheet;
+                if (sheetsById.has(sheet.id)) continue;
+                sheetsById.set(sheet.id, {
+                    sheetId: sheet.id,
+                    employeeName: `${row.employee?.firstName ?? ''} ${row.employee?.lastName ?? ''}`.trim(),
+                    sheetRef: sheet.sheetType === 'MONTHLY'
+                        ? `ใบรายเดือน ${sheet.monthPeriod}`
+                        : `ใบรายวัน ${toLocalDate(sheet.workDate)}`,
+                });
+            }
+
+            if (sheetsById.size > 0) {
+                throw err.conflict(
+                    { pendingSheets: [...sheetsById.values()] },
+                    `มีใบลงเวลาที่ยังไม่ได้ตรวจสอบ (PENDING) ${sheetsById.size} ใบในรอบนี้ — ข้อมูลจะไม่ถูกนับในการทำจ่าย กรุณาตรวจสอบ (FILLED) ให้ครบก่อน หรือยืนยันทำจ่ายโดยไม่รวมใบเหล่านี้`,
+                );
+            }
+        }
+
+        // DRIVER เป็นเงินเดือนรายเดือน — พนักงาน active ที่มี wageRate ในรอบ ได้ payroll ทุกคน
+        // แม้ไม่มี time entry เลย (เงินพื้นฐาน monthlyRate ส่วนการขาดคิดจากสูตรรายเดือน)
+        if (employeeType !== 'DRIVER' && candidateEmployeeIds.length === 0) {
+            return { created: 0, skipped: 0, payrolls: [] };
+        }
 
         const employeeWhere = employeeType === 'DRIVER'
             ? { isActive: true, startDate: { [Op.lte]: endDate } }
@@ -293,14 +350,8 @@ class PayPeriodService {
         });
         const linkedEntryIds = new Set(alreadyLinked.map((r) => r.timeEntryId));
 
-        // วันหยุดนักขัตฤกษ์ในรอบ (worker ได้ค่าจ้างรายวันอัตโนมัติ — spec section C)
-        const holidayRows = await Holiday.findAll({
-            where: { holidayDate: { [Op.gte]: startDate, [Op.lte]: endDate } },
-            attributes: ['holidayDate'],
-        });
-        const holidayDates = new Set(holidayRows.map((h) => toLocalDate(h.holidayDate)));
-
         // 4. Transaction: สร้าง Payroll + PayrollRelate
+        // (holiday pay คำนวณสดตอนอ่านสรุปยอด — ไม่ต้องดึง Holiday ตรงนี้)
         const results = await sequelize.transaction(async (t) => {
             let seq = await Payroll.count({
                 where: { payPeriodId },

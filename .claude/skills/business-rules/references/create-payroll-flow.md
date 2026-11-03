@@ -112,3 +112,17 @@ PAY-{year}-{periodNo 2 หลัก}-{seq 3 หลัก}
 - **DRIVER**: candidates = พนักงาน active ที่มี WageRate ตรงประเภท + startDate ≤ endDate ของรอบ
   **ทุกคน** (เงินเดือนรายเดือน — ไม่มี entry = ขาดทั้งรอบ โดนหักจน clamp 0)
 - Worker ที่ allEntries ว่างแต่มีวันลา → สร้าง payroll ด้วย relates ว่างได้
+
+## ใบค้าง PENDING gate (เพิ่ม 3 พ.ย. 2026)
+
+- ก่อนสร้างยอดจ่าย: ถ้ามี TimeSheet **PENDING** ที่มี entry ในช่วงรอบ และเจ้าของมี wageRate
+  ตรงประเภทของรอบ → **409 CONFLICT** พร้อม `details.pendingSheets` (ชื่อคน + อ้างอิงใบ)
+- ยืนยันข้ามด้วย `allowPendingSheets: true` ได้ (pattern เดียวกับ allowDuplicate) —
+  frontend แสดง confirm dialog พร้อมรายชื่อใบก่อนส่ง flag
+- เหตุผล: entry ของใบ PENDING ไม่ถูกนับ (driver = ขาดทั้งรอบ / worker = วันนั้นหายเงียบๆ)
+  — เคยทำให้ user งงว่า "ทำไมขาดงานหมด" เพราะลืมปรับ FILLED
+- ลำดับสำคัญ: check ต้องอยู่ "ก่อน" early-return ของ candidate ว่าง
+  (เจ้าของใบ PENDING ไม่อยู่ใน candidate pool ซึ่งกรองจากใบ FILLED)
+- Sequelize trap: include ระดับกลาง (nested wageRates) ห้าม `attributes: []` — ใช้ `['id']`
+- กู้ข้อมูลที่จ่ายไปแล้วโดยลืม FILLED: ปรับใบเป็น FILLED แล้วสร้างยอดจ่ายอีกครั้ง
+  (entry ที่ยัง DRAFT จะถูกดึงเข้ารอบเดิม)

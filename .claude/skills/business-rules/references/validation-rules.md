@@ -131,3 +131,8 @@ validation 7 ข้อ (เรียงตามลำดับตรวจ): �
 - เช็คทุก path: create ทั้งเดือน / add entry / update entry (`_validateDriverRegularDay`)
 - เหตุผล: วันหยุดไม่มีชั่วโมงคาดหวัง — REGULAR ไม่มีผลต่อเงิน (monthlyRate ครอบอยู่)
   ลงไปได้แค่ข้อมูลหลอก / frontend แสดงแถว "หยุด" + ชื่อวันหยุด ล็อกช่องเวลาปกติ
+
+## Payroll creation gate
+
+- มีใบลงเวลา PENDING ในช่วงรอบ (ของคนที่มี wageRate ตรงประเภทรอบ) → สร้างยอดจ่ายไม่ได้ (409)
+  ยืนยันข้ามด้วย `allowPendingSheets: true` — รายละเอียดดู create-payroll-flow.md

@@ -49,6 +49,7 @@ class PayPeriodController {
 
         const body = validate(req.body, Joi.object({
             employeeId: Joi.number().integer(),
+            allowPendingSheets: Joi.boolean().default(false),
         }));
 
         const result = await payPeriodService.createPayrollsForPeriod(id, body);

@@ -225,6 +225,41 @@ describe('Worker Payroll v2 — วันลา/วันหยุดเข้�
         expect(holiday2x.status).toBe(201);
     });
 
+    it('ใบลงเวลาค้าง PENDING → 409 พร้อมรายชื่อ / ยืนยันข้าม allowPendingSheets → สร้างได้', async () => {
+        const emp = seed.employees[0];
+        // สร้างใบแต่ "ไม่" เปลี่ยนสถานะเป็น FILLED
+        const sheet = await api.createWorkerTimeSheet({
+            workLeaderId: seed.workLeader.id,
+            workDate: '2025-06-02',
+            pattern: { regular: true, ot: 0 },
+            entries: [{ employeeId: emp.id, timeIn: '08:00:00', timeOut: '17:00:00', shiftType: 'REGULAR' }],
+        });
+        expect(sheet.status).toBe(201);
+
+        const period = await api.createPayPeriod({
+            periodNo: 1, year: 2025, employeeType: 'WORKER',
+            startDate: '2025-06-01', endDate: '2025-06-15',
+        });
+
+        // ไม่ส่ง flag → 409 พร้อมรายชื่อใบค้าง
+        const blocked = await api.createPayrolls(period.body.data.id, {});
+        expect(blocked.status).toBe(409);
+        expect(blocked.body.error.code).toBe('CONFLICT');
+        expect(blocked.body.error.details.pendingSheets).toHaveLength(1);
+        expect(blocked.body.error.details.pendingSheets[0].employeeName).toContain('Worker1');
+
+        // ยืนยันข้าม → สร้างได้ (ใบ PENDING ไม่มี entry ถูกนับ → created 0 สำหรับคนนี้)
+        const forced = await api.createPayrolls(period.body.data.id, { allowPendingSheets: true });
+        expect(forced.status).toBe(201);
+
+        // ปรับใบเป็น FILLED แล้วสร้างอีกครั้ง → entry ถูกนับครบ
+        await api.updateTimeSheet(sheet.body.data.id, { status: 'FILLED' });
+        const again = await api.createPayrolls(period.body.data.id, {});
+        expect(again.status).toBe(201);
+        expect(again.body.created).toBe(1);
+        expect(await paidValueOf(emp.id)).toEqual([RATE.daily]);
+    });
+
     it('วันหยุดก่อนวันเริ่มงานของพนักงาน → ไม่นับ holiday pay', async () => {
         // พนักงานเริ่ม 2025-06-05 — วันหยุด 2025-06-02 อยู่ก่อน startDate ไม่ได้เงิน
         const lateEmp = await Employee.create({
