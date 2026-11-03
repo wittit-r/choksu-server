@@ -163,6 +163,34 @@ class TimeSheetService {
         }
     }
 
+    /**
+     * Business rule: วันที่ "ไม่มีเวลาทำงานปกติ" ของ driver (อาทิตย์ + วันหยุดนักขัตฤกษ์)
+     * ลงงานปกติ (REGULAR) ไม่ได้ — ลงได้แค่ OT เท่านั้น (และค่าที่พัก)
+     * @param {Date} startTime
+     */
+    async _validateDriverRegularDay(startTime) {
+        if (startTime.getDay() === 0) {
+            throw err.validation(
+                { date: toLocalDate(startTime) },
+                'วันอาทิตย์เป็นวันหยุด — ลงเวลาปกติ (REGULAR) ไม่ได้ ลงได้แค่ OT',
+            );
+        }
+
+        const holiday = await Holiday.findOne({
+            where: {
+                holidayDate: new Date(
+                    startTime.getFullYear(), startTime.getMonth(), startTime.getDate(),
+                ),
+            },
+        });
+        if (holiday) {
+            throw err.validation(
+                { date: toLocalDate(startTime) },
+                `วันที่ ${toLocalDate(startTime)} เป็นวันหยุดนักขัตฤกษ์ (${holiday.name}) — ลงเวลาปกติ (REGULAR) ไม่ได้ ลงได้แค่ OT`,
+            );
+        }
+    }
+
     _validateWorkTypeRules(data, startTime, endTime) {
         const workType = data.workType || 'REGULAR';
         const otRate = data.otRate ?? 0;
@@ -739,9 +767,12 @@ class TimeSheetService {
         const accommodationEntries = entriesWithDateTime.filter((e) => e.workType === 'ACCOMMODATION');
 
         // 3.5 OT ของ driver ต้องอยู่นอกเวลาทำงานปกติ 08:00–17:00 จ–ส (spec section D)
+        //     และวันหยุด (อาทิตย์/นักขัตฤกษ์) ลงได้แค่ OT — REGULAR ไม่ได้
         for (const entry of timeEntries) {
             if (entry.workType === 'OVERTIME') {
                 await this._validateDriverOtWindow(entry.startTime, entry.endTime);
+            } else if (entry.workType === 'REGULAR') {
+                await this._validateDriverRegularDay(entry.startTime);
             }
         }
 
@@ -1227,6 +1258,8 @@ class TimeSheetService {
             this._validateWorkTypeRules(data, startTime, endTime);
             if (data.workType === 'OVERTIME') {
                 await this._validateDriverOtWindow(startTime, endTime);
+            } else if ((data.workType || 'REGULAR') === 'REGULAR') {
+                await this._validateDriverRegularDay(startTime);
             }
 
             // Create entry
@@ -1344,6 +1377,9 @@ class TimeSheetService {
         this._validateWorkTypeRules(mergedData, finalStartTime, finalEndTime);
         if (mergedData.workType === 'OVERTIME' && finalStartTime && finalEndTime) {
             await this._validateDriverOtWindow(finalStartTime, finalEndTime);
+        }
+        if ((mergedData.workType || 'REGULAR') === 'REGULAR' && finalStartTime) {
+            await this._validateDriverRegularDay(finalStartTime);
         }
 
         // 5. Update

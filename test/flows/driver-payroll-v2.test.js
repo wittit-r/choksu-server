@@ -217,6 +217,33 @@ describe('Driver Payroll v2 — golden cases จากแผ่นจ่าย�
         expect(s.netPay).toBe(13091);
     });
 
+    it('REGULAR วันอาทิตย์/วันนักขัตฤกษ์ → 422 (วันหยุดลงได้แค่ OT)', async () => {
+        const emp = await createDriver({
+            rate: { dailyRate: 576.13, hourlyRate: 72.016, minuteRate: 1.2, monthlyRate: 17284 },
+        });
+        await api.createHoliday({ date: '2026-12-07', name: 'วันทดสอบหยุด' });
+
+        // นักขัตฤกษ์ (จันทร์ 7 ธ.ค.) REGULAR → 422
+        const holiday = await api.createDriverTimeSheet({
+            employeeId: emp.id, monthPeriod: '2026-12', allowDuplicate: false,
+            entries: [
+                { date: '2026-12-07', timeIn: '08:00:00', timeOut: '17:00:00', workType: 'REGULAR', otRate: 0, accommodation: 0 },
+            ],
+        });
+        expect(holiday.status).toBe(422);
+        expect(holiday.body.error.message).toContain('นักขัตฤกษ์');
+
+        // อาทิตย์ (6 ธ.ค.) REGULAR → 422
+        const sunday = await api.createDriverTimeSheet({
+            employeeId: emp.id, monthPeriod: '2026-12', allowDuplicate: true,
+            entries: [
+                { date: '2026-12-06', timeIn: '08:00:00', timeOut: '17:00:00', workType: 'REGULAR', otRate: 0, accommodation: 0 },
+            ],
+        });
+        expect(sunday.status).toBe(422);
+        expect(sunday.body.error.message).toContain('วันอาทิตย์');
+    });
+
     it('OT validation: คร่อม 08:00–17:00 จ–ส → 422 / หลัง 17:00 / วันอาทิตย์ / วันนักขัตฤกษ์ → ผ่าน', async () => {
         const emp = await createDriver({
             rate: { dailyRate: 576.13, hourlyRate: 72.016, minuteRate: 1.2, monthlyRate: 17284 },

@@ -127,3 +127,16 @@ Unified model รองรับ 2 ประเภท: **DAILY** (Worker) แล
 | TimeSheet | ต้องเป็น PENDING เท่านั้น (cascade delete entries) |
 | TimeEntry (positive) | timesheet ต้องไม่ FILLED, entry ต้องยังไม่จ่ายเงิน |
 | TimeEntry (negative) | ต้องยังไม่จ่ายเงิน แต่ลบได้แม้ timesheet จะ FILLED |
+
+---
+
+## กฎเพิ่ม (Payroll leave v2 — พ.ย. 2026)
+
+- **Worker pattern วันนักขัตฤกษ์**: ลงได้เฉพาะ holiday_2x/holiday_3x (pattern ปกติ → 422)
+  ค่าจ้างวันหยุด 1× ระบบจ่ายอัตโนมัติที่สรุปยอด
+- **Driver OT window**: OT ต้องอยู่นอก 08:00–17:00 จ–ส (อาทิตย์/นักขัตฤกษ์ OT ได้ทุกช่วง)
+  เช็คทั้งตอน create ทั้งเดือน, add entry, update entry
+- **REGULAR ของ driver**: เวลาเข้า-ออกใช้แค่ "นับชั่วโมงทำจริง" (หักพักเที่ยงแล้ว)
+  ไม่ผลต่อเงินพื้นฐานโดยตรง / paidValue = 0
+- **Driver REGULAR วันหยุด** (อาทิตย์+นักขัตฤกษ์): reject 422 — ลงได้แค่ OT
+  (UI create dialog แสดง "หยุด"+ชื่อวันหยุด ล็อกแถวเหมือนอาทิตย์)
