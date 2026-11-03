@@ -157,7 +157,7 @@ class PayrollService {
         const payroll = await Payroll.findByPk(id, {
             include: {
                 association: 'payPeriod',
-                attributes: ['startDate', 'endDate'],
+                attributes: ['startDate', 'endDate', 'employeeType'],
             },
         });
         if (!payroll) throw err.notFound({ id }, 'ไม่พบรายการจ่ายเงิน');
@@ -253,8 +253,15 @@ class PayrollService {
             const wageRatesByDate = await payPeriodService._getWageRatesByDate(
                 payroll.employeeId, lookbackStart, endDate, t,
             );
+
+            // worker: นาทีลารายวันมาเติมวันทำงาน (spec section C)
+            const leavesByDate = payroll.payPeriod.employeeType === 'WORKER'
+                ? await payPeriodService._getLeaveMinutesByDate(payroll.employeeId, startDate, endDate, t)
+                : new Map();
+
             const entryAmounts = payPeriodService._calculatePayrollAmounts(
                 timeEntries, wageRatesByDate,
+                { employeeType: payroll.payPeriod.employeeType, leavesByDate },
             );
 
             // bulk update paidValue

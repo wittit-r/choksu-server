@@ -1,6 +1,6 @@
 import { Op } from "sequelize";
 
-import { sequelize, WorkLeader, Employee, TimeSheet, TimeEntry, PayrollRelate } from "../database/index.js";
+import { sequelize, WorkLeader, Employee, TimeSheet, TimeEntry, PayrollRelate, Holiday } from "../database/index.js";
 import err from "../utils/error.js";
 import { combineDateAndTime, toLocalDate, toLocalTime } from "../utils/date.js";
 
@@ -589,6 +589,17 @@ class TimeSheetService {
         }
         const workType = pattern.regular ? 'REGULAR' : 'OVERTIME';
         const otRate = pattern.ot || 0;
+
+        // Business rule (spec section C): วันหยุดนักขัตฤกษ์ ลง pattern ปกติไม่ได้
+        // ต้องลงแบบ "หยุด 2 เท่า / 3 เท่า" เท่านั้น (ค่าจ้างวันหยุด 1× ระบบจ่ายอัตโนมัติ)
+        const [hy, hm, hd] = workDate.split('-').map(Number);
+        const holiday = await Holiday.findOne({ where: { holidayDate: new Date(hy, hm - 1, hd) } });
+        if (holiday && (pattern.regular || pattern.ot < 2)) {
+            throw err.validation(
+                { workDate, pattern },
+                `วันที่ ${workDate} เป็นวันหยุดนักขัตฤกษ์ (${holiday.name}) — ต้องลงแบบหยุด 2 เท่า หรือ 3 เท่า เท่านั้น`,
+            );
+        }
 
         // 5. Execute in transaction
         const result = await sequelize.transaction(async (t) => {

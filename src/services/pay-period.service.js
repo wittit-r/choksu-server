@@ -9,9 +9,12 @@ import {
     Employee,
     WageRate,
     Position,
+    Holiday,
+    Leave,
 } from "../database/index.js";
 import err from "../utils/error.js";
 import { toLocalDate } from "../utils/date.js";
+import { effectiveMinutes } from "../utils/work-time.js";
 
 class PayPeriodService {
     constructor() {}
@@ -94,10 +97,16 @@ class PayPeriodService {
         const employeeIds = plain.payrolls.map((p) => p.employeeId);
         const wageRateMap = await this._getPrimaryWageRates(employeeIds, plain.startDate);
 
-        const payrolls = plain.payrolls.map((payroll) => {
+        const summaryCtx = {
+            employeeType: plain.employeeType,
+            periodStartDate: plain.startDate,
+            periodEndDate: plain.endDate,
+        };
+
+        const payrolls = await Promise.all(plain.payrolls.map(async (payroll) => {
             const wageRate = wageRateMap.get(payroll.employeeId)
                 ?? { dailyRate: 0, position: { code: null, name: null } };
-            const summary = this._buildPayrollSummary(payroll, wageRate);
+            const summary = await this._buildPayrollSummary(payroll, wageRate, summaryCtx);
             const { payrollRelates, employee, ...payrollData } = payroll;
             const { workLeader, ...employeeData } = employee;
             return {
@@ -110,7 +119,7 @@ class PayPeriodService {
                     branchName: workLeader?.branch?.name,
                 },
             };
-        });
+        }));
 
         return { ...plain, payrolls };
     }
@@ -187,11 +196,26 @@ class PayPeriodService {
             },
         });
 
-        if (employeesWithEntries.length === 0) {
-            return { created: 0, skipped: 0, payrolls: [] };
+        const candidateEmployeeIds = employeesWithEntries.map((e) => e.employeeId);
+
+        // Worker: คนที่ "มีวันลา" ในรอบแต่ไม่มาทำงานเลย (ลาเต็มรอบ) ก็ต้องได้ payroll
+        // — spec: ลาทุกชนิดได้รับค่าจ้างรายวัน (จ่ายผ่าน leaveOnlyPay ในสรุปยอด)
+        if (employeeType === 'WORKER') {
+            const employeesWithLeaves = await Leave.findAll({
+                where: { startTime: { [Op.gte]: startDate, [Op.lte]: endDate } },
+                attributes: ['employeeId'],
+                group: ['Leave.employee_id'],
+            });
+            for (const row of employeesWithLeaves) {
+                if (!candidateEmployeeIds.includes(row.employeeId)) {
+                    candidateEmployeeIds.push(row.employeeId);
+                }
+            }
         }
 
-        const candidateEmployeeIds = employeesWithEntries.map((e) => e.employeeId);
+        if (candidateEmployeeIds.length === 0) {
+            return { created: 0, skipped: 0, payrolls: [] };
+        }
 
         // 2. filter เฉพาะ employee ที่ตรงกับ employeeType
         // (แทน wageRates { some: { position: { employeeType } } } — ดึง position ids ก่อน
@@ -211,7 +235,7 @@ class PayPeriodService {
                 },
                 isActive: true,
             },
-            attributes: ['id'],
+            attributes: ['id', 'startDate'],
             include: {
                 association: 'wageRates',
                 attributes: [],
@@ -250,6 +274,13 @@ class PayPeriodService {
             },
         });
         const linkedEntryIds = new Set(alreadyLinked.map((r) => r.timeEntryId));
+
+        // วันหยุดนักขัตฤกษ์ในรอบ (worker ได้ค่าจ้างรายวันอัตโนมัติ — spec section C)
+        const holidayRows = await Holiday.findAll({
+            where: { holidayDate: { [Op.gte]: startDate, [Op.lte]: endDate } },
+            attributes: ['holidayDate'],
+        });
+        const holidayDates = new Set(holidayRows.map((h) => toLocalDate(h.holidayDate)));
 
         // 4. Transaction: สร้าง Payroll + PayrollRelate
         const results = await sequelize.transaction(async (t) => {
@@ -303,7 +334,6 @@ class PayPeriodService {
                 });
 
                 const allEntries = [...timeEntries, ...carryoverEntries];
-                if (allEntries.length === 0) continue;
 
                 // ดึง wage rates (เริ่มที่ lookbackStart เพื่อให้คำนวณ correction
                 // อ้างอัตราของ "วันที่ entry ต้นฉบับ" ได้)
@@ -311,8 +341,19 @@ class PayPeriodService {
                     employeeId, lookbackStart, endDate, t,
                 );
 
+                // นาทีลารายวัน (worker: นาทีลามา "เติม" วันทำงานให้ครบ 8 ชม. — spec section C)
+                const leavesByDate = employeeType === 'WORKER'
+                    ? await this._getLeaveMinutesByDate(employeeId, startDate, endDate, t)
+                    : new Map();
+
+                // worker ที่มีแต่วันลา (ไม่มี entry) ก็สร้าง payroll — จ่ายที่สรุปยอด
+                if (allEntries.length === 0 && (employeeType !== 'WORKER' || leavesByDate.size === 0)) continue;
+
                 // คำนวณ paidValue
-                const entryAmounts = this._calculatePayrollAmounts(allEntries, wageRatesByDate);
+                const entryAmounts = this._calculatePayrollAmounts(
+                    allEntries, wageRatesByDate,
+                    { employeeType, leavesByDate },
+                );
 
                 // บันทึก paidValue ลง time entry (bulk update)
                 if (entryAmounts.length > 0) {
@@ -672,8 +713,61 @@ class PayPeriodService {
         return counts;
     }
 
-    _calculatePayrollAmounts(timeEntries, wageRatesByDate) {
+    /**
+     * คำนวณ paidValue ทุก entry ของพนักงาน 1 คน
+     *
+     * WORKER (spec section C): ค่าจ้างพื้นฐานคิด "ต่อวัน" —
+     *   นาทีทำงานจริง + นาทีลาของวันนั้น → ≥480 = dailyRate เต็มวัน / <480 = ย่อยหน่วย
+     *   (วันที่มีหลาย REGULAR entry รวมเป็นวันเดียว จ่ายที่ entry แรก)
+     *   วันลาที่ไม่มี entry เลย (ลาเต็มวัน) ไม่มีที่ยึด paidValue — จ่ายตอนสรุปยอดแทน
+     *
+     * @param {Array} timeEntries
+     * @param {Map} wageRatesByDate - dateKey → WageRate
+     * @param {Object} [ctx]
+     * @param {string} [ctx.employeeType] - WORKER ถึงใช้สูตรรายวัน
+     * @param {Map} [ctx.leavesByDate] - dateKey → นาทีลาของวันนั้น
+     */
+    _calculatePayrollAmounts(timeEntries, wageRatesByDate, ctx = null) {
         const entryAmounts = [];
+
+        // WORKER: รวม REGULAR entries เป็นรายวัน + เติมนาทีลา
+        const workerDays = ctx?.employeeType === 'WORKER' ? new Map() : null;
+        if (workerDays) {
+            for (const entry of timeEntries) {
+                if (entry.isNegative || entry.isRetro) continue;
+                if (entry.workType !== 'REGULAR') continue;
+                const dateKey = toLocalDate(entry.startTime);
+                if (!workerDays.has(dateKey)) {
+                    workerDays.set(dateKey, { entries: [], minutes: 0 });
+                }
+                const day = workerDays.get(dateKey);
+                day.entries.push(entry);
+                if (entry.endTime) {
+                    day.minutes += effectiveMinutes(entry.startTime, entry.endTime, {
+                        lunch: entry.shiftType === 'REGULAR',
+                    });
+                }
+            }
+
+            for (const [dateKey, day] of workerDays) {
+                const wageRate = wageRatesByDate.get(dateKey);
+                const minutes = day.minutes + (ctx.leavesByDate?.get(dateKey) ?? 0);
+                let dayPay = 0;
+                if (wageRate && minutes > 0) {
+                    const dailyRate = Number(wageRate.dailyRate);
+                    const hourlyRate = Number(wageRate.hourlyRate);
+                    const minuteRate = Number(wageRate.minuteRate);
+                    if (minutes >= 480) {
+                        dayPay = dailyRate;
+                    } else {
+                        dayPay = Math.floor(minutes / 60) * hourlyRate + (minutes % 60) * minuteRate;
+                    }
+                }
+                day.entries.forEach((entry, index) => {
+                    entryAmounts.push({ id: entry.id, paidValue: index === 0 ? dayPay : 0 });
+                });
+            }
+        }
 
         for (const entry of timeEntries) {
             if (entry.isNegative) {
@@ -681,6 +775,8 @@ class PayPeriodService {
                 entryAmounts.push({ id: entry.id, paidValue: -amount });
             } else if (entry.isRetro) {
                 // retro entries มี paidValue อยู่แล้ว — skip
+            } else if (workerDays && entry.workType === 'REGULAR') {
+                // WORKER REGULAR จัดการแล้วด้านบน (คิดต่อวัน)
             } else {
                 if (entry.workType === 'ACCOMMODATION') {
                     entryAmounts.push({ id: entry.id, paidValue: Number(entry.accommodation || 0) });
@@ -692,6 +788,29 @@ class PayPeriodService {
         }
 
         return entryAmounts;
+    }
+
+    /**
+     * นาทีลารายวันของพนักงาน 1 คนในช่วง [startDate, endDate]
+     * (นาทีลาหักพักกลางวัน 12:00–13:00 ถ้าคร่อม — spec section A)
+     * @returns {Promise<Map<string, number>>} dateKey "YYYY-MM-DD" → นาที
+     */
+    async _getLeaveMinutesByDate(employeeId, startDate, endDate, tx = null) {
+        const leaves = await Leave.findAll({
+            where: {
+                employeeId,
+                startTime: { [Op.gte]: startDate, [Op.lte]: endDate },
+            },
+            attributes: ['startTime', 'endTime'],
+            ...(tx ? { transaction: tx } : {}),
+        });
+
+        const map = new Map();
+        for (const leave of leaves) {
+            const key = toLocalDate(leave.startTime);
+            map.set(key, (map.get(key) ?? 0) + effectiveMinutes(leave.startTime, leave.endTime));
+        }
+        return map;
     }
 
     _calculateEntryAmount(entry, wageRatesByDate) {
@@ -788,7 +907,24 @@ class PayPeriodService {
         return rateMap;
     }
 
-    _buildPayrollSummary(payroll, dailyRate) {
+    /**
+     * สรุปยอดจ่ายของ payroll 1 ใบ
+     *
+     * WORKER (spec section C) เพิ่มที่นี่ (คำนวณสดจากตาราง Holiday/Leave):
+     * - holidayPay: ทุกวันนักขัตฤกษ์ในรอบ (≥ employee.startDate) ได้ dailyRate ณ วันนั้น
+     *   — ไม่ว่าจะมาทำหรือไม่ (มาทำ = ลง holiday_2x/3x ได้เงิน entry เพิ่มอีกชั้น)
+     * - leaveOnlyPay: วันลาที่ "ไม่มี REGULAR entry" (ลาเต็มวัน/บางวันโดยไม่มาทำงาน)
+     *   — ไม่มี entry ให้ยึด paidValue จึงจ่ายตอนสรุปยอด ตามเกณฑ์ 480 นาทีเหมือนกัน
+     * - นาทีลา (ทุกกรณี) รวมเข้า regularEffectiveMinutes เพื่อนับ workingDays
+     *
+     * @param {Object} payroll - พร้อม payrollRelates.timeEntry
+     * @param {Object} wageRate - wage rate หลักของรอบ (แสดง dailyRate)
+     * @param {Object} [ctx]
+     * @param {string} [ctx.employeeType] - WORKER / DRIVER
+     * @param {Date} [ctx.periodStartDate]
+     * @param {Date} [ctx.periodEndDate]
+     */
+    async _buildPayrollSummary(payroll, wageRate, ctx = null) {
         const entries = payroll.payrollRelates.map((r) => r.timeEntry);
 
         let regularAmount = 0;
@@ -798,6 +934,10 @@ class PayPeriodService {
         const otMinutes = { '1': 0, '1.5': 0, '2': 0, '3': 0 };
         let deductionAmount = 0;
         let retroAmount = 0;
+        let holidayDays = 0;
+        let holidayAmount = 0;
+        let leaveOnlyMinutes = 0;
+        let leaveOnlyAmount = 0;
 
         for (const entry of entries) {
             const paidValue = entry.paidValue != null ? Number(entry.paidValue) : 0;
@@ -810,31 +950,16 @@ class PayPeriodService {
                 if (entry.workType === 'REGULAR') {
                     regularAmount += paidValue;
                     if (entry.endTime) {
-                        let effective = Math.round(
-                            (entry.endTime.getTime() - entry.startTime.getTime()) / 60000,
+                        regularEffectiveMinutes += effectiveMinutes(
+                            entry.startTime, entry.endTime,
+                            { lunch: entry.shiftType === 'REGULAR' },
                         );
-                        // กะข้ามวัน — ชดเชย 24 ชม. เมื่อผลต่างติดลบ
-                        if (effective < 0) effective += 24 * 60;
-                        if (entry.shiftType === 'REGULAR') {
-                            const startMin = entry.startTime.getHours() * 60 + entry.startTime.getMinutes();
-                            const endMin = entry.endTime.getHours() * 60 + entry.endTime.getMinutes();
-                            const overlapStart = Math.max(startMin, 720);
-                            const overlapEnd = Math.min(endMin, 780);
-                            if (overlapStart < overlapEnd) {
-                                effective -= (overlapEnd - overlapStart);
-                            }
-                        }
-                        regularEffectiveMinutes += Math.max(0, effective);
                     }
                 } else if (entry.workType === 'OVERTIME') {
                     otAmount += paidValue;
                     const rateKey = String(Number(entry.otRate) || 1);
                     if (entry.endTime) {
-                        let minutes = Math.round(
-                            (entry.endTime.getTime() - entry.startTime.getTime()) / 60000,
-                        );
-                        // กะข้ามวัน — ชดเชย 24 ชม. เมื่อผลต่างติดลบ
-                        if (minutes < 0) minutes += 24 * 60;
+                        const minutes = effectiveMinutes(entry.startTime, entry.endTime, { lunch: false });
                         if (otMinutes.hasOwnProperty(rateKey)) {
                             otMinutes[rateKey] += minutes;
                         } else {
@@ -845,6 +970,60 @@ class PayPeriodService {
                     accommodationAmount += paidValue;
                 }
             }
+        }
+
+        if (ctx?.employeeType === 'WORKER' && ctx.periodStartDate && ctx.periodEndDate) {
+            // วันที่มี REGULAR entry — นาทีลาของวันเหล่านี้ถูก top-up เข้า paidValue แล้ว
+            const regularDays = new Set(
+                entries
+                    .filter((e) => !e.isNegative && !e.isRetro && e.workType === 'REGULAR')
+                    .map((e) => toLocalDate(e.startTime)),
+            );
+
+            const [holidayRows, leaves, wageRatesByDate, employee] = await Promise.all([
+                Holiday.findAll({
+                    where: { holidayDate: { [Op.gte]: ctx.periodStartDate, [Op.lte]: ctx.periodEndDate } },
+                    attributes: ['holidayDate'],
+                }),
+                Leave.findAll({
+                    where: {
+                        employeeId: payroll.employeeId,
+                        startTime: { [Op.gte]: ctx.periodStartDate, [Op.lte]: ctx.periodEndDate },
+                    },
+                    attributes: ['startTime', 'endTime'],
+                }),
+                this._getWageRatesByDate(payroll.employeeId, ctx.periodStartDate, ctx.periodEndDate),
+                Employee.findByPk(payroll.employeeId, { attributes: ['startDate'] }),
+            ]);
+
+            for (const holiday of holidayRows) {
+                if (employee?.startDate && holiday.holidayDate < employee.startDate) continue;
+                holidayDays++;
+                holidayAmount += Number(wageRatesByDate.get(toLocalDate(holiday.holidayDate))?.dailyRate ?? 0);
+            }
+
+            const leaveMinutesByDay = new Map();
+            for (const leave of leaves) {
+                const key = toLocalDate(leave.startTime);
+                const minutes = effectiveMinutes(leave.startTime, leave.endTime);
+                leaveMinutesByDay.set(key, (leaveMinutesByDay.get(key) ?? 0) + minutes);
+            }
+            for (const [dateKey, minutes] of leaveMinutesByDay) {
+                regularEffectiveMinutes += minutes;
+                if (!regularDays.has(dateKey)) {
+                    const rate = wageRatesByDate.get(dateKey);
+                    if (rate && minutes > 0) {
+                        leaveOnlyMinutes += minutes;
+                        leaveOnlyAmount += minutes >= 480
+                            ? Number(rate.dailyRate)
+                            : Math.floor(minutes / 60) * Number(rate.hourlyRate) + (minutes % 60) * Number(rate.minuteRate);
+                    }
+                }
+            }
+
+            regularAmount += holidayAmount + leaveOnlyAmount;
+            // วันหยุด = 1 วันทำงานเต็มวันในสายตา workingDays (ตามระบบ "แรง" ในแผ่นจ่ายจริง)
+            regularEffectiveMinutes += holidayDays * 480;
         }
 
         const sso = Number(payroll.ssoAmount) || 0;
@@ -858,12 +1037,16 @@ class PayPeriodService {
         const workingDays = Math.round((regularEffectiveMinutes / 480) * 1000) / 1000;
 
         return {
-            dailyRate: dailyRate.dailyRate || 0,
+            dailyRate: wageRate.dailyRate || 0,
             regularAmount: Math.round(regularAmount * 100) / 100,
             otAmount: Math.round(otAmount * 100) / 100,
             accommodationAmount: Math.round(accommodationAmount * 100) / 100,
             deductionAmount: Math.round(deductionAmount * 100) / 100,
             retroAmount: Math.round(retroAmount * 100) / 100,
+            holidayDays,
+            holidayAmount: Math.round(holidayAmount * 100) / 100,
+            leaveOnlyMinutes,
+            leaveOnlyAmount: Math.round(leaveOnlyAmount * 100) / 100,
             workingDays,
             overtimeMinutes: otMinutes,
             netPay,
