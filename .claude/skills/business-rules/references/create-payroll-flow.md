@@ -89,8 +89,13 @@ PAY-{year}-{periodNo 2 หลัก}-{seq 3 หลัก}
 ## exportPayPeriod(payPeriodId)
 
 - PayPeriod ต้องเป็น OPEN
-- อัปเดต Payroll ทุกอันที่เป็น PENDING → CALCULATED
-- (TODO: สร้าง Excel file)
+- สร้างไฟล์ .xlsx ชื่อ payroll_p{periodNo}_{year}_{employeeType}.xlsx
+  4 คอลัมน์ตาม sheet Transaction ของ KBank template
+  (D เลขบัญชี string / E ชื่อ / F netPay / G Bene Ref = payroll.payRef)
+  — คนไม่มีเลขบัญชีออกแถวแต่ช่องบัญชีว่าง
+- generate ไฟล์ก่อน แล้วค่อยอัปเดต Payroll PENDING → CALCULATED
+- response เป็น binary file attachment (ไม่ใช่ JSON)
+- payRef ในคอลัมน์ G คือ key สำหรับ importBankFile จับคู่ยืนยัน PAID
 
 ## closePayPeriod(payPeriodId, { force })
 

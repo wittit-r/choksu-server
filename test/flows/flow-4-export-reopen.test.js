@@ -75,9 +75,11 @@ describe('Flow 4: Export แล้ว ต้องเพิ่มพนักง
         expect(firstPayroll.status).toBe('PENDING');
 
         // Step 3: export → payroll คนแรก PENDING → CALCULATED (period ยัง OPEN)
+        // export ตอนนี้คืนไฟล์ xlsx แนบ (ไม่ใช่ JSON)
         const export1 = await api.exportPeriod(periodId);
         expect(export1.status).toBe(200);
-        expect(export1.body.data.updatedCount).toBe(1);
+        expect(export1.headers['content-type']).toContain('spreadsheetml');
+        expect(export1.headers['content-disposition']).toContain('attachment; filename="payroll_p1_2025_WORKER.xlsx"');
 
         const afterExport = await api.getPayPeriodById(periodId);
         expect(afterExport.body.data.status).toBe('OPEN'); // export ไม่ปิดรอบ
@@ -123,7 +125,6 @@ describe('Flow 4: Export แล้ว ต้องเพิ่มพนักง
         // Step 7: export รอบสอง → เฉพาะ PENDING ใหม่ → CALCULATED
         const export2 = await api.exportPeriod(periodId);
         expect(export2.status).toBe(200);
-        expect(export2.body.data.updatedCount).toBe(1);
 
         // Step 8: ปิดรอบ
         const closeRes2 = await api.closePeriod(periodId);

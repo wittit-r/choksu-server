@@ -17,6 +17,7 @@ app.use(cors({
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["Content-Disposition"], // ชื่อไฟล์จาก export ให้ JS ฝั่ง browser อ่านได้
 }));
 
 // Default routes

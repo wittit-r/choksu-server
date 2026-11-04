@@ -79,8 +79,10 @@ class PayPeriodController {
             id: Joi.number().integer().required(),
         }));
 
-        const result = await payPeriodService.exportPayPeriod(id);
-        res.status(200).json({ success: true, ...result });
+        const { buffer, filename } = await payPeriodService.exportPayPeriod(id);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.status(200).send(Buffer.from(buffer));
     };
 
     closePayPeriod = async (req, res) => {

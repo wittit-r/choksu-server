@@ -1,4 +1,5 @@
 import { Op } from "sequelize";
+import ExcelJS from "exceljs";
 
 import {
     sequelize,
@@ -669,18 +670,15 @@ class PayPeriodService {
             throw err.badRequest(null, 'รอบจ่ายไม่อยู่ในสถานะเปิด');
         }
 
-        // //TODO - Generate Excel file
-        // const buffer = await this._generateExcelFile(payPeriodId);
+        // generate ก่อน flip สถานะ — ถ้า generate พัง สถานะไม่เปลี่ยน
+        const { buffer, filename } = await this._generateExcelFile(payPeriodId);
 
         const [updatedCount] = await Payroll.update(
             { status: 'CALCULATED' },
             { where: { payPeriodId, status: 'PENDING' } },
         );
 
-        return {
-            message: 'Export successful (TODO: Excel generation)',
-            data: { updatedCount },
-        };
+        return { buffer, filename, updatedCount };
     }
 
     async closePayPeriod(payPeriodId, { force = false } = {}) {
@@ -1314,6 +1312,39 @@ class PayPeriodService {
     // NNN: ลำดับ
     _generatePayRef(year, periodNo, seq) {
         return `PAY-${year}-${String(periodNo).padStart(2, '0')}-${String(seq).padStart(3, '0')}`;
+    }
+
+    // สร้างไฟล์ .xlsx 4 คอลัมน์ตาม sheet Transaction ของ template KBank
+    // (KBank_Excel Template_V2.6.1.xlsm) เพื่อ copy ไปวางที่คอลัมน์ D–G แถว 8
+    // เลขบัญชีเขียนเป็น text เสมอ — บัญชีขึ้นต้น 0 ต้องไม่หาย
+    // Bene Ref ใช้ payroll.payRef — ไฟล์ผลโอนจากธนาคารจะส่งเลขนี้กลับมา
+    // ใช้จับคู่ตอน import ยืนยันสถานะ PAID
+    async _generateExcelFile(payPeriodId) {
+        const detail = await this.getPayPeriodById(payPeriodId);
+
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet('Transaction');
+        sheet.columns = [
+            { header: 'เลขที่บัญชี\nAccount Number', key: 'accountNumber', width: 24 },
+            { header: 'ชื่อผู้รับเงิน\nVendor Name', key: 'vendorName', width: 32 },
+            { header: 'จำนวนเงิน\nAmount', key: 'amount', width: 14 },
+            { header: 'เลขที่อ้างอิงรายการ\nBene Ref', key: 'beneRef', width: 22 },
+        ];
+
+        detail.payrolls.forEach((payroll) => {
+            sheet.addRow({
+                accountNumber: payroll.employee.bankAccount ?? '',
+                vendorName: `${payroll.employee.firstName} ${payroll.employee.lastName}`.trim(),
+                amount: payroll.summary.netPay,
+                beneRef: payroll.payRef,
+            });
+        });
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        return {
+            buffer,
+            filename: `payroll_p${detail.periodNo}_${detail.year}_${detail.employeeType}.xlsx`,
+        };
     }
 }
 

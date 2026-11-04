@@ -68,10 +68,10 @@ describe('Flow 1: Happy Path — จ่ายเงินปกติทุก�
         expect(payrollRes.body.payrolls.length).toBe(3);
         expect(payrollRes.body.payrolls[0].status).toBe('PENDING');
 
-        // Step 5: Export (PENDING → CALCULATED)
+        // Step 5: Export (PENDING → CALCULATED) — ตอนนี้คืนไฟล์ xlsx แนบ (ไม่ใช่ JSON)
         const exportRes = await api.exportPeriod(periodId);
         expect(exportRes.status).toBe(200);
-        expect(exportRes.body.data.updatedCount).toBe(3);
+        expect(exportRes.headers['content-type']).toContain('spreadsheetml');
 
         // Step 6: ตรวจสอบ payroll ทั้งหมดเป็น CALCULATED
         const payrollsRes = await api.getPayrolls({ payPeriodId: periodId, limit: 10 });
