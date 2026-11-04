@@ -114,11 +114,11 @@ export function createApiClient(accessToken) {
         createPayrolls: (periodId, body = {}) =>
             request(testServer).post(`/pay-periods/${periodId}/payrolls`).send(body).set(authHeader),
 
-        cancelAllPayrolls: (periodId) =>
-            request(testServer).delete(`/pay-periods/${periodId}/payrolls`).set(authHeader),
+        cancelAllPayrolls: (periodId, body = {}) =>
+            request(testServer).delete(`/pay-periods/${periodId}/payrolls`).send(body).set(authHeader),
 
-        recalculatePeriod: (periodId) =>
-            request(testServer).patch(`/pay-periods/${periodId}/recalculate`).set(authHeader),
+        recalculatePeriod: (periodId, body = {}) =>
+            request(testServer).patch(`/pay-periods/${periodId}/recalculate`).send(body).set(authHeader),
 
         exportPeriod: (periodId) =>
             request(testServer).post(`/pay-periods/${periodId}/export`).set(authHeader),
@@ -142,11 +142,11 @@ export function createApiClient(accessToken) {
         updatePayroll: (id, data) =>
             request(testServer).patch(`/payrolls/${id}`).send(data).set(authHeader),
 
-        cancelPayroll: (id) =>
-            request(testServer).delete(`/payrolls/${id}`).set(authHeader),
+        cancelPayroll: (id, body = {}) =>
+            request(testServer).delete(`/payrolls/${id}`).send(body).set(authHeader),
 
-        recalculatePayroll: (id) =>
-            request(testServer).patch(`/payrolls/${id}/recalculate`).set(authHeader),
+        recalculatePayroll: (id, body = {}) =>
+            request(testServer).patch(`/payrolls/${id}/recalculate`).send(body).set(authHeader),
 
         retroCalculate: (data) =>
             request(testServer).post('/payrolls/retro-calculate').send(data).set(authHeader),

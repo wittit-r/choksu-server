@@ -109,9 +109,9 @@ describe('Export KBank Transaction file', () => {
             expect(row.getCell(4).value).toBe(payroll.payRef);
         });
 
-        // export แล้ว payroll PENDING → CALCULATED (period ยัง OPEN)
+        // export = finalize: payroll PENDING → CALCULATED + ปิดรอบเป็น CLOSED ทันที
         const after = (await api.getPayPeriodById(periodId)).body.data;
-        expect(after.status).toBe('OPEN');
+        expect(after.status).toBe('CLOSED');
         expect(after.payrolls.every((p) => p.status === 'CALCULATED')).toBe(true);
     });
 

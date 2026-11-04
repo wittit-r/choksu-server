@@ -68,7 +68,8 @@ describe('Flow 1: Happy Path — จ่ายเงินปกติทุก�
         expect(payrollRes.body.payrolls.length).toBe(3);
         expect(payrollRes.body.payrolls[0].status).toBe('PENDING');
 
-        // Step 5: Export (PENDING → CALCULATED) — ตอนนี้คืนไฟล์ xlsx แนบ (ไม่ใช่ JSON)
+        // Step 5: Export = finalize (PENDING → CALCULATED + ปิดรอบ CLOSED)
+        // ตอนนี้คืนไฟล์ xlsx แนบ (ไม่ใช่ JSON)
         const exportRes = await api.exportPeriod(periodId);
         expect(exportRes.status).toBe(200);
         expect(exportRes.headers['content-type']).toContain('spreadsheetml');
@@ -80,9 +81,9 @@ describe('Flow 1: Happy Path — จ่ายเงินปกติทุก�
             expect(p.status).toBe('CALCULATED');
         }
 
-        // Step 7: ปิดรอบ (OPEN → CLOSED)
+        // Step 7: export ปิดรอบให้แล้ว — ปิดซ้ำด้วยมือต้อง 400
         const closeRes = await api.closePeriod(periodId);
-        expect(closeRes.status).toBe(200);
+        expect(closeRes.status).toBe(400);
 
         // Step 8: ตรวจสอบสถานะรอบจ่ายเป็น CLOSED
         const period = await api.getPayPeriodById(periodId);

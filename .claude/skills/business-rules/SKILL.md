@@ -46,8 +46,9 @@ Employee ──► WageRate ──► TimeSheet ──► TimeEntry ──► Pa
 4. ยืนยันใบลงเวลา → TimeSheet status: FILLED
 5. สร้าง Payroll → คำนวณ paidValue → TimeEntry status: LOCKED
    (holiday pay + ค่าจ้างวันลาไม่มี entry คำนวณสดตอนอ่านสรุปยอด ไม่ผูกกับ entry)
-6. Export → Payroll status: CALCULATED
-7. จ่ายเงิน → Payroll status: PAID, TimeEntry.paidDate
+6. Export (finalize) → Payroll status: CALCULATED + PayPeriod status: CLOSED พร้อมกัน
+   (generate ไฟล์ก่อน แล้ว flip ทั้งสองใน transaction เดียว — docs/PAYROLL-EXPORT-LOCK-PLAN.md)
+7. Import ไฟล์ผลโอนธนาคาร (เฉพาะรอบ CLOSED) → Payroll status: PAID, TimeEntry.paidDate
 ```
 
 ## ประเภทพนักงาน

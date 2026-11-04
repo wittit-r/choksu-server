@@ -37,10 +37,12 @@ class PayrollController {
             ssoAmount: Joi.number().precision(2).min(0),
             slfAmount: Joi.number().precision(2).min(0),
             otherDeduction: Joi.number().precision(2).min(0),
-        }).min(1));
+            allowExported: Joi.boolean().default(false),
+        }).or('ssoAmount', 'slfAmount', 'otherDeduction'));
 
-        const data = await payrollService.updatePayroll(id, body);
-        res.status(200).json({ success: true, data });
+        const { allowExported, ...data } = body;
+        const updated = await payrollService.updatePayroll(id, data, { allowExported });
+        res.status(200).json({ success: true, data: updated });
     };
 
     cancelPayroll = async (req, res) => {
@@ -48,7 +50,11 @@ class PayrollController {
             id: Joi.number().integer().required(),
         }));
 
-        const result = await payrollService.cancelPayroll(id);
+        const { allowExported } = validate(req.body || {}, Joi.object({
+            allowExported: Joi.boolean().default(false),
+        }));
+
+        const result = await payrollService.cancelPayroll(id, { allowExported });
         res.status(200).json({ success: true, ...result });
     };
 
@@ -57,7 +63,11 @@ class PayrollController {
             id: Joi.number().integer().required(),
         }));
 
-        const result = await payrollService.recalculatePayroll(id);
+        const { allowExported } = validate(req.body || {}, Joi.object({
+            allowExported: Joi.boolean().default(false),
+        }));
+
+        const result = await payrollService.recalculatePayroll(id, { allowExported });
         res.status(200).json({ success: true, data: result });
     };
 

@@ -74,7 +74,12 @@ describe('Flow 4: Export แล้ว ต้องเพิ่มพนักง
         const firstPayroll = createRes.body.payrolls[0];
         expect(firstPayroll.status).toBe('PENDING');
 
-        // Step 3: export → payroll คนแรก PENDING → CALCULATED (period ยัง OPEN)
+        // Step 2.5: reopen ตอนรอบยัง OPEN → 400 (ยังไม่ถึงจังหวะ reopen)
+        const reopenTooEarly = await api.reopenPeriod(periodId);
+        expect(reopenTooEarly.status).toBe(400);
+        expect(reopenTooEarly.body.error.message).toContain('ไม่อยู่ในสถานะปิด');
+
+        // Step 3: export = finalize → payroll คนแรก PENDING → CALCULATED + ปิดรอบ CLOSED
         // export ตอนนี้คืนไฟล์ xlsx แนบ (ไม่ใช่ JSON)
         const export1 = await api.exportPeriod(periodId);
         expect(export1.status).toBe(200);
@@ -82,7 +87,7 @@ describe('Flow 4: Export แล้ว ต้องเพิ่มพนักง
         expect(export1.headers['content-disposition']).toContain('attachment; filename="payroll_p1_2025_WORKER.xlsx"');
 
         const afterExport = await api.getPayPeriodById(periodId);
-        expect(afterExport.body.data.status).toBe('OPEN'); // export ไม่ปิดรอบ
+        expect(afterExport.body.data.status).toBe('CLOSED'); // export ปิดรอบอัตโนมัติ
         const exported = afterExport.body.data.payrolls.find(
             (p) => p.id === firstPayroll.id,
         );
@@ -94,16 +99,7 @@ describe('Flow 4: Export แล้ว ต้องเพิ่มพนักง
         const sheet2Detail = await api.getTimesheetById(sheet2.id);
         expect(sheet2Detail.body.data.timeEntries[0].status).toBe('DRAFT');
 
-        // Step 5a: reopen ตาม Flow 4 → จริงคือ 400 เพราะ period ยัง OPEN
-        const reopenTooEarly = await api.reopenPeriod(periodId);
-        expect(reopenTooEarly.status).toBe(400);
-        expect(reopenTooEarly.body.error.message).toContain('ไม่อยู่ในสถานะปิด');
-
-        // Step 5b: close (ไม่มี PENDING ค้าง → ปิดได้) แล้ว reopen → OPEN ตามเป้า Flow 4
-        const closeRes = await api.closePeriod(periodId);
-        expect(closeRes.status).toBe(200);
-        expect((await api.getPayPeriodById(periodId)).body.data.status).toBe('CLOSED');
-
+        // Step 5: reopen รอบที่ export ปิดไปแล้ว → OPEN เพื่อเพิ่มคนใหม่
         const reopenRes = await api.reopenPeriod(periodId);
         expect(reopenRes.status).toBe(200);
         expect(reopenRes.body.data.status).toBe('OPEN');
@@ -122,13 +118,13 @@ describe('Flow 4: Export แล้ว ต้องเพิ่มพนักง
         expect(createRes2.body.payrolls[0].employeeId).toBe(seed.employees[1].id);
         expect(createRes2.body.payrolls[0].status).toBe('PENDING');
 
-        // Step 7: export รอบสอง → เฉพาะ PENDING ใหม่ → CALCULATED
+        // Step 7: export รอบสอง → เฉพาะ PENDING ใหม่ → CALCULATED + ปิดรอบอัตโนมัติ
         const export2 = await api.exportPeriod(periodId);
         expect(export2.status).toBe(200);
 
-        // Step 8: ปิดรอบ
+        // Step 8: export ปิดรอบให้แล้ว — ปิดซ้ำด้วยมือต้อง 400
         const closeRes2 = await api.closePeriod(periodId);
-        expect(closeRes2.status).toBe(200);
+        expect(closeRes2.status).toBe(400);
 
         // ตรวจสถานะทุกตัว: period CLOSED, payroll 2 ตัว CALCULATED,
         // ตัวเก่า id/payRef ไม่เปลี่ยน, time entries ทั้งสอง sheet LOCKED พร้อม paidValue
