@@ -277,6 +277,19 @@ export const defineModels = (sequelize) => {
         ],
     });
 
+    // ─── SSO config (เงื่อนไขประกันสังคมตามช่วงเวลา) ────
+    const SsoConfig = sequelize.define("SsoConfig", {
+        id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+        effectiveFrom: { type: DataTypes.DATE, allowNull: false },
+        effectiveTo: { type: DataTypes.DATE },              // null = ใช้ตลอดไป (pattern WageRate)
+        ratePercent: decimal(5, 2, { key: "ratePercent", extra: { allowNull: false } }),
+        maxWage: decimal(12, 2, { key: "maxWage", extra: { allowNull: false } }),
+    }, {
+        tableName: "sso_configs",
+        underscored: true,
+        indexes: [{ fields: ["effective_from"] }],
+    });
+
     // ─── Payroll ─────────────────────────────────────────
     const Payroll = sequelize.define("Payroll", {
         id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
@@ -284,6 +297,8 @@ export const defineModels = (sequelize) => {
         employeeId: { type: DataTypes.INTEGER, allowNull: false },
         payPeriodId: { type: DataTypes.INTEGER, allowNull: false },
         ssoAmount: decimal(12, 2, { key: "ssoAmount", extra: { allowNull: false, defaultValue: 0 } }),
+        ssoBase: decimal(12, 2, { key: "ssoBase" }),       // snapshot ฐานค่าจ้างตอน auto-calc (null = แถวเก่า/manual)
+        ssoCap: decimal(12, 2, { key: "ssoCap" }),          // snapshot เพดานยอดหักที่ใช้ตอนคิด
         slfAmount: decimal(12, 2, { key: "slfAmount", extra: { allowNull: false, defaultValue: 0 } }),
         otherDeduction: decimal(12, 2, { key: "otherDeduction", extra: { allowNull: false, defaultValue: 0 } }),
         status: {
@@ -440,6 +455,6 @@ export const defineModels = (sequelize) => {
         Branch, Position, Contract, PayPeriod, User, Session, AuditLog,
         WorkLeader, Employee, WageRate, BillRate, TimeSheet, TimeEntry,
         Holiday, LeaveType, Leave, LeaveEntitlement,
-        Payroll, PayrollRelate, InvoicePeriod, Invoice, InvoiceRelate,
+        Payroll, PayrollRelate, SsoConfig, InvoicePeriod, Invoice, InvoiceRelate,
     };
 };

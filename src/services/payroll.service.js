@@ -270,10 +270,19 @@ class PayrollService {
                 await payPeriodService._bulkUpdatePaidValue(entryAmounts, t);
             }
 
+            // คำนวณยอดหัก SSO ใหม่ตามสูตรเสมอ (ทับการแก้มือ — docs/SSO-PLAN.md)
+            const ssoWarning = await payPeriodService._computeAndSaveSso(payroll, {
+                employeeType: payroll.payPeriod.employeeType,
+                periodStartDate: startDate,
+                periodEndDate: endDate,
+                wageRatesByDate,
+            }, t);
+
             return {
                 id,
                 entryCount: timeEntries.length,
                 newEntries: newEntries.length,
+                warnings: ssoWarning ? [ssoWarning] : [],
             };
         });
 

@@ -16,6 +16,7 @@ import {
 import err from "../utils/error.js";
 import { toLocalDate, nextMidnight } from "../utils/date.js";
 import { effectiveMinutes } from "../utils/work-time.js";
+import ssoConfigService from "./sso-config.service.js";
 
 class PayPeriodService {
     constructor() {}
@@ -144,6 +145,15 @@ class PayPeriodService {
         const end = new Date(ey, em - 1, ed);
         if (end <= start) {
             throw err.validation({ startDate, endDate }, 'endDate ต้องมากกว่า startDate');
+        }
+
+        // รอบจ่ายต้องอยู่ในเดือนปฏิทินเดียวกัน (ทั้ง WORKER/DRIVER)
+        // — SSO สะสมเพดานรายเดือนข้ามรอบ + รายงานนำส่งจับกลุ่มตามเดือนของ endDate
+        if (sy !== ey || sm !== em) {
+            throw err.validation(
+                { startDate, endDate },
+                'รอบจ่ายต้องเริ่มและสิ้นสุดในเดือนเดียวกัน',
+            );
         }
 
         const payPeriod = await PayPeriod.create({
@@ -351,8 +361,9 @@ class PayPeriodService {
         });
         const linkedEntryIds = new Set(alreadyLinked.map((r) => r.timeEntryId));
 
-        // 4. Transaction: สร้าง Payroll + PayrollRelate
+        // 4. Transaction: สร้าง Payroll + PayrollRelate + คำนวณ SSO
         // (holiday pay คำนวณสดตอนอ่านสรุปยอด — ไม่ต้องดึง Holiday ตรงนี้)
+        const ssoWarnings = new Set();
         const results = await sequelize.transaction(async (t) => {
             let seq = await Payroll.count({
                 where: { payPeriodId },
@@ -455,6 +466,15 @@ class PayPeriodService {
 
                 await PayrollRelate.bulkCreate(relateData, { transaction: t });
 
+                // คำนวณ + บันทึกยอดหัก SSO อัตโนมัติ (สูตรตาม docs/SSO-PLAN.md)
+                const ssoWarning = await this._computeAndSaveSso(payroll, {
+                    employeeType,
+                    periodStartDate: startDate,
+                    periodEndDate: endDate,
+                    wageRatesByDate,
+                }, t);
+                if (ssoWarning) ssoWarnings.add(ssoWarning);
+
                 createdPayrolls.push({
                     ...payroll.toJSON(),
                     entryCount: timeEntries.length,
@@ -468,6 +488,7 @@ class PayPeriodService {
             created: results.length,
             skipped: validEmployeeIds.length - results.length,
             payrolls: results,
+            warnings: Array.from(ssoWarnings),
         };
     }
 
@@ -541,7 +562,7 @@ class PayPeriodService {
         });
 
         if (payrolls.length === 0) {
-            return { updated: 0, payrolls: [] };
+            return { updated: 0, payrolls: [], warnings: [] };
         }
 
         // Carryover: correction/retro จากรอบก่อน (business rule เดียวกับ createPayrolls)
@@ -549,6 +570,7 @@ class PayPeriodService {
         const lookbackStart = new Date(startDate);
         lookbackStart.setDate(lookbackStart.getDate() - lookbackDays);
 
+        const ssoWarnings = new Set();
         const results = await sequelize.transaction(async (t) => {
             const updated = [];
 
@@ -638,6 +660,15 @@ class PayPeriodService {
                     await this._bulkUpdatePaidValue(entryAmounts, t);
                 }
 
+                // คำนวณยอดหัก SSO ใหม่ตามสูตรเสมอ (ทับการแก้มือ)
+                const ssoWarning = await this._computeAndSaveSso(payroll, {
+                    employeeType: payPeriod.employeeType,
+                    periodStartDate: startDate,
+                    periodEndDate: endDate,
+                    wageRatesByDate,
+                }, t);
+                if (ssoWarning) ssoWarnings.add(ssoWarning);
+
                 updated.push({
                     id: payroll.id,
                     entryCount: timeEntries.length,
@@ -648,7 +679,7 @@ class PayPeriodService {
             return updated;
         });
 
-        return { updated: results.length, payrolls: results };
+        return { updated: results.length, payrolls: results, warnings: Array.from(ssoWarnings) };
     }
 
     async reopenPayPeriod(payPeriodId) {
@@ -1005,7 +1036,7 @@ class PayPeriodService {
      * @param {Date} [ctx.periodStartDate]
      * @param {Date} [ctx.periodEndDate]
      */
-    async _buildPayrollSummary(payroll, wageRate, ctx = null) {
+    async _buildPayrollSummary(payroll, wageRate, ctx = null, tx = null) {
         const entries = payroll.payrollRelates.map((r) => r.timeEntry);
 
         let regularAmount = 0;
@@ -1065,6 +1096,7 @@ class PayPeriodService {
                 Holiday.findAll({
                     where: { holidayDate: { [Op.gte]: ctx.periodStartDate, [Op.lte]: ctx.periodEndDate } },
                     attributes: ['holidayDate'],
+                    ...(tx && { transaction: tx }),
                 }),
                 Leave.findAll({
                     where: {
@@ -1072,9 +1104,10 @@ class PayPeriodService {
                         startTime: { [Op.gte]: ctx.periodStartDate, [Op.lt]: nextMidnight(ctx.periodEndDate) },
                     },
                     attributes: ['startTime', 'endTime'],
+                    ...(tx && { transaction: tx }),
                 }),
-                this._getWageRatesByDate(payroll.employeeId, ctx.periodStartDate, ctx.periodEndDate),
-                Employee.findByPk(payroll.employeeId, { attributes: ['startDate'] }),
+                this._getWageRatesByDate(payroll.employeeId, ctx.periodStartDate, ctx.periodEndDate, tx),
+                Employee.findByPk(payroll.employeeId, { attributes: ['startDate'], ...(tx && { transaction: tx }) }),
             ]);
 
             for (const holiday of holidayRows) {
@@ -1109,7 +1142,7 @@ class PayPeriodService {
 
         let driverSummary = null;
         if (ctx?.employeeType === 'DRIVER' && ctx.periodStartDate && ctx.periodEndDate) {
-            driverSummary = await this._buildDriverSummary(payroll, entries, wageRate, ctx);
+            driverSummary = await this._buildDriverSummary(payroll, entries, wageRate, ctx, tx);
             regularAmount += driverSummary.basePay;
         }
 
@@ -1164,11 +1197,12 @@ class PayPeriodService {
      * เข้าใหม่กลางเดือน (startDate อยู่ในรอบ) → โหมดรายวัน:
      *                 basePay = วันสุทธิ (entry + ลา + นักขัตฤกษ์ จ–ส) × dailyRate รายวัน
      */
-    async _buildDriverSummary(payroll, entries, primaryWageRate, ctx) {
+    async _buildDriverSummary(payroll, entries, primaryWageRate, ctx, tx = null) {
         const [holidayRows, leaves, wageRatesByDate, employee] = await Promise.all([
             Holiday.findAll({
                 where: { holidayDate: { [Op.gte]: ctx.periodStartDate, [Op.lte]: ctx.periodEndDate } },
                 attributes: ['holidayDate'],
+                ...(tx && { transaction: tx }),
             }),
             Leave.findAll({
                 where: {
@@ -1176,9 +1210,10 @@ class PayPeriodService {
                     startTime: { [Op.gte]: ctx.periodStartDate, [Op.lt]: nextMidnight(ctx.periodEndDate) },
                 },
                 attributes: ['startTime', 'endTime'],
+                ...(tx && { transaction: tx }),
             }),
-            this._getWageRatesByDate(payroll.employeeId, ctx.periodStartDate, ctx.periodEndDate),
-            Employee.findByPk(payroll.employeeId, { attributes: ['startDate'] }),
+            this._getWageRatesByDate(payroll.employeeId, ctx.periodStartDate, ctx.periodEndDate, tx),
+            Employee.findByPk(payroll.employeeId, { attributes: ['startDate'], ...(tx && { transaction: tx }) }),
         ]);
 
         const holidaySet = new Set(holidayRows.map((h) => toLocalDate(h.holidayDate)));
@@ -1264,6 +1299,90 @@ class PayPeriodService {
             netDays: isNewcomer ? netDays : null,
             workedDays: workedDaysSet.size,
         };
+    }
+
+    /**
+     * คำนวณ + บันทึกยอดหักประกันสังคม (SSO) ของ payroll หนึ่งรายการ (docs/SSO-PLAN.md)
+     *
+     * ฐาน = regularAmount − correction ของรอบ (clamp 0) — WORKER รวม holiday + ค่าจ้างวันลา
+     * DRIVER ใช้ basePay หลังหักขาด (ผ่าน _buildPayrollSummary เหมือนกัน)
+     * ยอด = min(ปัดสปส(rate × base), cap − ยอด SSO ที่หักไปแล้วในเดือนเดียวกัน)
+     * — ใช้สูตรสะสมกับทุกประเภท: DRIVER ปกติมีรอบเดียว/เดือน → prevPaid = 0 ผลเท่ากันเป๊ะ
+     *
+     * @param {Object} payroll - Payroll instance (ยังไม่ต้องมี includes — helper ดึง relates เอง)
+     * @param {Object} ctx - { employeeType, periodStartDate, periodEndDate, wageRatesByDate }
+     * @param {Object} t - sequelize transaction (ต้องอยู่ใน transaction ของ caller เสมอ)
+     * @returns {Promise<string|null>} warning message ถ้าไม่มี config ครอบช่วง (sso = 0)
+     */
+    async _computeAndSaveSso(payroll, ctx, t) {
+        const config = await ssoConfigService.getConfigAt(ctx.periodEndDate, t);
+        if (!config) {
+            await payroll.update({ ssoAmount: 0, ssoBase: null, ssoCap: null }, { transaction: t });
+            const d = `${ctx.periodEndDate.getFullYear()}-${String(ctx.periodEndDate.getMonth() + 1).padStart(2, '0')}-${String(ctx.periodEndDate.getDate()).padStart(2, '0')}`;
+            return `SSO: ไม่พบเงื่อนไขประกันสังคมที่ครอบวันที่ ${d} — รายการนี้ไม่ถูกหัก SSO`;
+        }
+
+        // ดึง relates + entries ใน transaction เดียวกัน (มองเห็น relate ที่เพิ่งสร้างก่อน commit)
+        const relates = await PayrollRelate.findAll({
+            where: { payrollId: payroll.id },
+            include: { association: 'timeEntry' },
+            transaction: t,
+        });
+        const summary = await this._buildPayrollSummary(
+            { employeeId: payroll.employeeId, ssoAmount: 0, slfAmount: 0, otherDeduction: 0, payrollRelates: relates },
+            ctx.wageRatesByDate?.get(toLocalDate(ctx.periodEndDate)) ?? {},
+            {
+                employeeType: ctx.employeeType,
+                periodStartDate: ctx.periodStartDate,
+                periodEndDate: ctx.periodEndDate,
+            },
+            t,
+        );
+
+        const rate = Number(config.ratePercent);
+        const base = Math.max(0, Math.round((summary.regularAmount - summary.deductionAmount) * 100) / 100);
+        const cap = Math.round(Number(config.maxWage) * rate / 100);
+        const raw = Math.round(base * rate / 100);
+
+        const prevPaid = await this._sumPrevMonthSso(payroll.employeeId, payroll.id, ctx.periodEndDate, t);
+        const sso = Math.min(raw, Math.max(0, cap - prevPaid));
+
+        await payroll.update({ ssoAmount: sso, ssoBase: base, ssoCap: cap }, { transaction: t });
+        return null;
+    }
+
+    /**
+     * ยอด SSO ที่ถูกหักไปแล้วใน "รอบก่อนหน้าของเดือนเดียวกัน" ของพนักงานคนเดียวกัน
+     * — เดือน = เดือนของ endDate (รอบครึ่งเดือนแรก/หลังจบในเดือนเดียวกัน)
+     * — รอบก่อนหน้า = payroll status ≠ CANCELLED และ period.endDate น้อยกว่ารอบปัจจุบัน
+     *   (สร้างรอบสลับลำดับ: สูตรยังคิดจากรอบที่จบก่อนเสมอ — แก้ด้วย recalculate รอบหลัง)
+     */
+    async _sumPrevMonthSso(employeeId, excludePayrollId, periodEndDate, t) {
+        const monthStart = new Date(periodEndDate.getFullYear(), periodEndDate.getMonth(), 1);
+        const monthEnd = new Date(periodEndDate.getFullYear(), periodEndDate.getMonth() + 1, 1);
+
+        const rows = await Payroll.findAll({
+            where: {
+                employeeId,
+                id: { [Op.ne]: excludePayrollId },
+                status: { [Op.ne]: 'CANCELLED' },
+            },
+            include: {
+                association: 'payPeriod',
+                attributes: ['endDate'],
+                where: { endDate: { [Op.gte]: monthStart, [Op.lt]: monthEnd } },
+                required: true,
+            },
+            transaction: t,
+        });
+
+        let sum = 0;
+        for (const row of rows) {
+            if (row.payPeriod.endDate < periodEndDate) {
+                sum += Number(row.ssoAmount) || 0;
+            }
+        }
+        return sum;
     }
 
     async _getPrimaryWageRates(employeeIds, periodStartDate) {

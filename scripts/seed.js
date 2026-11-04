@@ -9,7 +9,7 @@
  * ข้อมูลอ้างอิง (สาขา/ตำแหน่ง/หัวหน้างาน) มาจากชุดจริงของโปรเจค
  * พนักงานตัวอย่าง 2 คนเป็นข้อมูลทดสอบ (นำหน้า SEED-) ลบออกได้ไม่กระทบอะไร
  */
-import { sequelize, Branch, Position, WorkLeader, User, Employee, WageRate, Holiday, LeaveType } from "../src/database/index.js";
+import { sequelize, Branch, Position, WorkLeader, User, Employee, WageRate, Holiday, LeaveType, SsoConfig } from "../src/database/index.js";
 import { hashPassword } from "../src/utils/password.js";
 
 const RESET = process.argv.includes("--reset") && process.argv.includes("--yes");
@@ -57,6 +57,14 @@ const LEAVE_TYPES = [
     { name: "ลากิจ", defaultDaysPerYear: 3 },
 ];
 
+// เงื่อนไขประกันสังคม (sso) ตามช่วงเวลา — อัตรา 5% ตลอด, เพดานค่าจ้างขยับเป็นระยะตามกฎหมาย
+const SSO_CONFIGS = [
+    { effectiveFrom: "2020-01-01", effectiveTo: "2025-12-31", ratePercent: 5, maxWage: 15000 },
+    { effectiveFrom: "2026-01-01", effectiveTo: "2028-12-31", ratePercent: 5, maxWage: 17500 },
+    { effectiveFrom: "2029-01-01", effectiveTo: "2031-12-31", ratePercent: 5, maxWage: 20000 },
+    { effectiveFrom: "2032-01-01", effectiveTo: null, ratePercent: 5, maxWage: 23000 },
+];
+
 // วันหยุดนักขัตฤกษ์ตัวอย่าง (วันตามราชการที่ตรงแน่) — แก้/เพิ่ม/ลบได้ผ่านระบบทุกปี
 // หมายเหตุ: วันจันทรคติ (มาฆบูชา/วิสาขบูชา/เข้าพรรษา/อาสาฬหบูชา) + หยุดชดเชจพิเศษของ กฟภ. ต้องใส่เพิ่มเองรายปี
 const HOLIDAYS = [
@@ -97,7 +105,7 @@ const run = async () => {
         await sequelize.query("SET FOREIGN_KEY_CHECKS = 0");
         for (const t of ["audit_logs", "invoice_relates", "invoices", "invoice_periods", "bill_rates",
             "payroll_relates", "payrolls", "time_entries", "time_sheets", "wage_rates",
-            "leave_entitlements", "leaves", "leave_types", "holidays",
+            "leave_entitlements", "leaves", "leave_types", "holidays", "sso_configs",
             "employees", "sessions", "users", "work_leaders", "contracts", "positions", "branches"]) {
             await sequelize.query(`DELETE FROM ${t}`);
             await sequelize.query(`ALTER TABLE ${t} AUTO_INCREMENT = 1`);
@@ -141,6 +149,23 @@ const run = async () => {
         await LeaveType.findOrCreate({ where: { name: lt.name }, defaults: { ...lt, isActive: true } });
     }
     console.log("leave_types:", await LeaveType.count());
+
+    // เงื่อนไขประกันสังคม (คีย์ natural = effectiveFrom → แก้แถวเดิมผ่านระบบได้ seed ไม่ทับ)
+    for (const c of SSO_CONFIGS) {
+        // numeric-local constructor → เที่ยงคืนเวลาไทยตรงๆ (กัน skew 07:00 เหมือน holidays)
+        const [fy, fm, fd] = c.effectiveFrom.split("-").map(Number);
+        const effectiveFrom = new Date(fy, fm - 1, fd);
+        let effectiveTo = null;
+        if (c.effectiveTo) {
+            const [ty, tm, td] = c.effectiveTo.split("-").map(Number);
+            effectiveTo = new Date(ty, tm - 1, td);
+        }
+        await SsoConfig.findOrCreate({
+            where: { effectiveFrom },
+            defaults: { effectiveFrom, effectiveTo, ratePercent: c.ratePercent, maxWage: c.maxWage },
+        });
+    }
+    console.log("sso_configs:", await SsoConfig.count());
 
     for (const h of HOLIDAYS) {
         // numeric-local constructor → เที่ยงคืนเวลาไทยตรงๆ ไม่ขึ้นกับ TZ env

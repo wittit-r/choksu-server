@@ -234,6 +234,25 @@ export function createApiClient(accessToken) {
         generateEntitlements: (data) =>
             request(testServer).post('/leave-entitlements/generate').send(data).set(authHeader),
 
+        // SSO Configs
+        getSsoConfigs: () =>
+            request(testServer).get('/sso-configs').set(authHeader),
+
+        createSsoConfig: (data) =>
+            request(testServer).post('/sso-configs').send(data).set(authHeader),
+
+        updateSsoConfig: (id, data) =>
+            request(testServer).patch(`/sso-configs/${id}`).send(data).set(authHeader),
+
+        deleteSsoConfig: (id) =>
+            request(testServer).delete(`/sso-configs/${id}`).set(authHeader),
+
+        getSsoReport: (query = {}) =>
+            request(testServer).get('/sso-configs/report').query(query).set(authHeader),
+
+        exportSsoReport: (query = {}) =>
+            request(testServer).get('/sso-configs/report/export').query(query).set(authHeader),
+
         addFile: (sheetId, data) =>
             request(testServer).post(`/timesheets/${sheetId}/files`).send(data).set(authHeader),
 

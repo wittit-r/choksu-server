@@ -11,6 +11,7 @@ const TABLES = [
     'leave_entitlements',
     'leave_types',
     'holidays',
+    'sso_configs',
     'employees',
     'sessions',
     'users',
