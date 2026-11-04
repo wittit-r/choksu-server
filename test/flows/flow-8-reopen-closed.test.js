@@ -54,8 +54,8 @@ describe('Flow 8: ปิดรอบไปแล้ว ต้องเพิ่�
         const payrollRes = await api.createPayrolls(periodId);
         expect(payrollRes.body.created).toBe(3);
 
+        // export = finalize ปิดรอบให้เอง (ไม่ต้อง close ซ้ำ)
         await api.exportPeriod(periodId);
-        await api.closePeriod(periodId);
 
         // ตรวจสอบ CLOSED
         const periodCheck = await api.getPayPeriodById(periodId);
@@ -85,13 +85,14 @@ describe('Flow 8: ปิดรอบไปแล้ว ต้องเพิ่�
         expect(newPayrollRes.status).toBe(201);
         expect(newPayrollRes.body.created).toBe(2);
 
-        // Step 5: Export payroll ใหม่
+        // Step 5: Export payroll ใหม่ = ปิดรอบใหม่ให้เอง
         const exportRes = await api.exportPeriod(periodId);
         expect(exportRes.status).toBe(200);
 
-        // Step 6: ปิดรอบใหม่
+        // Step 6: ปิดซ้ำด้วยมือ → 400 (export ปิดไปแล้ว)
         const closeRes = await api.closePeriod(periodId);
-        expect(closeRes.status).toBe(200);
+        expect(closeRes.status).toBe(400);
+        expect((await api.getPayPeriodById(periodId)).body.data.status).toBe('CLOSED');
 
         // Step 7: ตรวจสอบ payroll เดิมยังคง CALCULATED
         const oldPayrollIds = payrollRes.body.payrolls.map(p => p.id);

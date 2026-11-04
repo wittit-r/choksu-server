@@ -3,15 +3,16 @@
 ## PayPeriod Status
 
 ```
-OPEN ──────────────► CLOSED
-  │                   ▲
-  │                   │
-  └── reopenPayPeriod ┘
+OPEN ───export (auto-close)──► CLOSED ───import (CLOSED only)──► (Payroll → PAID)
+  ▲                              │
+  └───────── reopenPayPeriod ◄───┘
 ```
 
-- **OPEN**: รับข้อมูลได้, สามารถสร้าง/ยกเลิก payroll
-- **CLOSED**: ล็อคแล้ว, ไม่สามารถสร้าง payroll ใหม่
-- ปิดรอบด้วย `closePayPeriod()` — error ถ้ามี PENDING ที่ยังไม่ export (ใช้ `force=true` บังคับ)
+- **OPEN**: รับข้อมูลได้, สามารถสร้าง/ยกเลิก/คำนวณใหม่ (รายการ CALCULATED ต้องยืนยัน `allowExported`)
+- **CLOSED**: ล็อคทุก action (สร้าง/แก้หัก/recalculate/cancel/export) **ไม่มี override** — ต้อง `reopenPayPeriod` ก่อนเท่านั้น (ยกเว้น import ไฟล์ธนาคารที่ทำได้เฉพาะรอบ CLOSED)
+- **export = finalize**: ทุกครั้งที่ `exportPayPeriod()` สำเร็จ รอบปิดเป็น CLOSED อัตโนมัติ (flip PENDING→CALCULATED + ปิดรอบใน transaction เดียว)
+- ปิดรอบด้วยมือ `closePayPeriod()` สำหรับรอบที่ไม่ export (รอบว่าง) — error ถ้ามี PENDING ที่ยังไม่ export (ใช้ `force=true` บังคับ)
+- ดูรายละเอียด gates: [create-payroll-flow.md](create-payroll-flow.md) + docs/PAYROLL-EXPORT-LOCK-PLAN.md
 
 ### PayPeriod Fields
 
@@ -37,8 +38,8 @@ PENDING ──► CALCULATED ──► PAID
 ```
 
 - **PENDING**: สร้างใหม่แล้ว รอดำเนินการ
-- **CALCULATED**: export แล้ว พร้อมจ่าย
-- **PAID**: จ่ายเงินแล้ว → **ห้ามแก้ไขอะไรทั้งสิ้น**
+- **CALCULATED**: export แล้ว พร้อมจ่าย (UI แสดง badge "ส่งออกไฟล์แล้ว")
+- **PAID**: จ่ายเงินแล้ว → **ห้ามแก้ไขอะไรทั้งสิ้น** (ตั้งสถานะผ่าน import ไฟล์ธนาคารของรอบ CLOSED)
 - **CANCELLED**: ยกเลิก → คืน TimeEntry เป็น DRAFT, paidValue = null
 
 ### Payroll Fields
@@ -53,7 +54,10 @@ PENDING ──► CALCULATED ──► PAID
 
 ### กฎ
 
-- PENDING หรือ CALCULATED → แก้ไข ssoAmount, slfAmount, otherDeduction ได้
+- PENDING → แก้ไข ssoAmount, slfAmount, otherDeduction / recalculate / cancel ได้ปกติ
+- CALCULATED (export ไปแล้ว) → ทำได้ทุกอย่างแต่ backend ตอบ **409** จนกว่าส่ง `allowExported: true`
+  (รายคน: `details.payRef` / ทั้งรอบ: `details.exportedPayrolls[]` — pattern เดียวกับ allowPendingSheets)
+- รอบ PayPeriod เป็น CLOSED → ห้าม mutate ทุก action (400) ไม่มี override ต้อง reopen ก่อน
 - PAID หรือ CANCELLED → ห้ามแก้ไข
 - ยกเลิกได้เฉพาะ PENDING หรือ CALCULATED
 - ยกเลิกแล้วคืน TimeEntry ทั้งหมดเป็น DRAFT + paidValue = null

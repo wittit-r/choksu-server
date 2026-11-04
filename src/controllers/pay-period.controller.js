@@ -61,7 +61,11 @@ class PayPeriodController {
             id: Joi.number().integer().required(),
         }));
 
-        const result = await payPeriodService.cancelAllPayrolls(id);
+        const { allowExported } = validate(req.body || {}, Joi.object({
+            allowExported: Joi.boolean().default(false),
+        }));
+
+        const result = await payPeriodService.cancelAllPayrolls(id, { allowExported });
         res.status(200).json({ success: true, ...result });
     };
 
@@ -70,7 +74,11 @@ class PayPeriodController {
             id: Joi.number().integer().required(),
         }));
 
-        const result = await payPeriodService.recalculatePayPeriod(id);
+        const { allowExported } = validate(req.body || {}, Joi.object({
+            allowExported: Joi.boolean().default(false),
+        }));
+
+        const result = await payPeriodService.recalculatePayPeriod(id, { allowExported });
         res.status(200).json({ success: true, ...result });
     };
 

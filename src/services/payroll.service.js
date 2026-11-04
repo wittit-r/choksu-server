@@ -9,6 +9,25 @@ import payPeriodService from "./pay-period.service.js";
 class PayrollService {
     constructor() {}
 
+    /**
+     * Gate การ mutate payroll (docs/PAYROLL-EXPORT-LOCK-PLAN.md กติกา #2, #3)
+     * - รอบ CLOSED → 400 ห้ามแก้ทุกกรณี (ต้อง reopen ก่อน)
+     * - payroll CALCULATED (export ไปแล้ว) → 409 จนกว่าส่ง allowExported
+     * @param {Object} payroll - ต้อง include payPeriod (status) และมี payRef
+     * @param {{ allowExported?: boolean }} options
+     */
+    _assertMutable(payroll, { allowExported = false } = {}) {
+        if (payroll.payPeriod?.status === 'CLOSED') {
+            throw err.badRequest(null, 'รอบจ่ายปิดแล้ว ไม่สามารถแก้ไขได้ (ใช้เปิดรอบใหม่ก่อน)');
+        }
+        if (payroll.status === 'CALCULATED' && !allowExported) {
+            throw err.conflict(
+                { payRef: payroll.payRef },
+                'รายการนี้ส่งออกไฟล์แล้ว หากส่งไฟล์ให้ธนาคารไปแล้ว การแก้ไขจะทำให้ยอดไม่ตรงกัน (ส่ง allowExported เพื่อยืนยัน)',
+            );
+        }
+    }
+
     async getPayrolls({ page, limit, sort, sortBy, payPeriodId, employeeId, status, year, employeeType }) {
         const where = {};
 
@@ -99,13 +118,16 @@ class PayrollService {
         return payroll.toJSON();
     }
 
-    async updatePayroll(id, data) {
-        const payroll = await Payroll.findByPk(id);
+    async updatePayroll(id, data, { allowExported = false } = {}) {
+        const payroll = await Payroll.findByPk(id, {
+            include: { association: 'payPeriod', attributes: ['status'] },
+        });
         if (!payroll) throw err.notFound({ id }, 'ไม่พบรายการจ่ายเงิน');
 
         if (payroll.status === 'PAID' || payroll.status === 'CANCELLED') {
             throw err.badRequest(null, 'รายการนี้ไม่สามารถแก้ไขได้');
         }
+        this._assertMutable(payroll, { allowExported });
 
         const updated = await payroll.update({
             ...(data.ssoAmount !== undefined && { ssoAmount: data.ssoAmount }),
@@ -116,13 +138,16 @@ class PayrollService {
         return updated.toJSON();
     }
 
-    async cancelPayroll(id) {
-        const payroll = await Payroll.findByPk(id);
+    async cancelPayroll(id, { allowExported = false } = {}) {
+        const payroll = await Payroll.findByPk(id, {
+            include: { association: 'payPeriod', attributes: ['status'] },
+        });
         if (!payroll) throw err.notFound({ id }, 'ไม่พบรายการจ่ายเงิน');
 
         if (payroll.status !== 'PENDING' && payroll.status !== 'CALCULATED') {
             throw err.badRequest(null, 'รายการนี้ไม่สามารถยกเลิกได้');
         }
+        this._assertMutable(payroll, { allowExported });
 
         await sequelize.transaction(async (t) => {
             // ดึง timeEntryIds ที่เกี่ยวข้อง
@@ -154,11 +179,11 @@ class PayrollService {
         return { message: 'ยกเลิกรายการจ่ายเงินสำเร็จ' };
     }
 
-    async recalculatePayroll(id) {
+    async recalculatePayroll(id, { allowExported = false } = {}) {
         const payroll = await Payroll.findByPk(id, {
             include: {
                 association: 'payPeriod',
-                attributes: ['startDate', 'endDate', 'employeeType'],
+                attributes: ['startDate', 'endDate', 'employeeType', 'status'],
             },
         });
         if (!payroll) throw err.notFound({ id }, 'ไม่พบรายการจ่ายเงิน');
@@ -166,6 +191,7 @@ class PayrollService {
         if (payroll.status !== 'PENDING' && payroll.status !== 'CALCULATED') {
             throw err.badRequest(null, 'รายการนี้ไม่สามารถคำนวณใหม่ได้');
         }
+        this._assertMutable(payroll, { allowExported });
 
         const { startDate, endDate } = payroll.payPeriod;
 

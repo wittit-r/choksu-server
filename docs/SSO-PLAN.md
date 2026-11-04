@@ -19,7 +19,7 @@
 | 6 | ปัดเศษ | ตามกฎสปส: เศษ ≥ 0.50 ปัดขึ้นเป็นบาท, < 0.50 ตัด (`Math.round` ตรงเงื่อนไข) |
 | 7 | สร้างรอบสลับลำดับ | สูตรเดียวกันทุกกรณี — แก้ด้วยกด **recalculate** รอบหลัง (ไม่บล็อก ไม่เตือน 409) |
 | 8 | ไม่มี config ครอบช่วง | SSO = 0 + **warning ใน response** (ไม่ error ไม่บล็อก) |
-| 9 | Manual edit | แก้ `ssoAmount` มือได้เท่าเดิม (PENDING/CALCULATED), **recalculate ทับกลับตามสูตรเสมอ** |
+| 9 | Manual edit | แก้ `ssoAmount` มือได้เท่าเดิม (PENDING ปกติ / CALCULATED ต้องยืนยัน `allowExported` — 409 ตาม PAYROLL-EXPORT-LOCK-PLAN.md), **recalculate ทับกลับตามสูตรเสมอ** |
 | 10 | Config CRUD | **ห้ามช่วงเวลาทับกัน**, แก้/ลบแถวเก่าได้เสมอ (payroll เก็บ snapshot แล้ว ยอดเก่าไม่เพี้ยน — แต่ recalc รอบเก่าจะใช้ config ใหม่) |
 | 11 | Validation PayPeriod ใหม่ | startDate/endDate ต้องอยู่ **เดือนปฏิทินเดียวกัน** ทั้ง WORKER และ DRIVER (บังคับตอน create) |
 | 12 | AuditLog | **ข้าม**ในฟีเจอร์นี้ (ผู้ใช้จะไล่ทำทั้งระบบภายหลัง) |
@@ -171,3 +171,5 @@ DRIVER:  sso       = min(raw, cap)
   UI ตรวจใน browser ครบ (ตาราง/409 toast/export binary ผ่าน network). ปรับเพิ่มจากแผนเดิม:
   สูตรสะสมใช้กับทุกประเภท (DRIVER 1 รอบ/เดือน prevPaid=0 ผลเท่าเดิม) เพื่อโค้ดเดียว
 - เหลือ: sync /business-rules skill (ร่างแล้ว รอผู้ใช้ยืนยันตามกติกา)
+- 4 พ.ย. 2026 — กติกา #9 ขยาย: manual edit บน CALCULATED ถูก gate 409 + `allowExported`
+  ตามแผนล็อครอบจ่าย (docs/PAYROLL-EXPORT-LOCK-PLAN.md) — ตัว endpoint/สูตรไม่เปลี่ยน

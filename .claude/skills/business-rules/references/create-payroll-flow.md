@@ -53,26 +53,29 @@ PAY-{year}-{periodNo 2 หลัก}-{seq 3 หลัก}
 
 ## Recalculate — คำนวณใหม่
 
-### recalculatePayroll(id)
+### recalculatePayroll(id, { allowExported })
 
 - ดึง time entries ทั้งหมดของพนักงานในรอบ (**รวม negative และ retro**)
   บวก carryover ย้อนหลัง (PAYROLL_LOOKBACK_DAYS) ที่ยังไม่ถูกจ่าย
 - เพิ่ม relate ใหม่สำหรับ entries ที่ยังไม่ linked
 - คำนวณ paidValue ใหม่จาก **ทุก entry** (เก่า + ใหม่)
 - ใช้ได้เฉพาะ PENDING หรือ CALCULATED
+- **Gates (PAYROLL-EXPORT-LOCK-PLAN):** รอบ CLOSED → 400 / payroll CALCULATED ไม่มี `allowExported` → 409
 
-### recalculatePayPeriod(payPeriodId)
+### recalculatePayPeriod(payPeriodId, { allowExported })
 
 - ทำเช่นเดียวกับ recalculatePayroll แต่วนลูป **ทุก payroll** ในรอบ
 - ใช้ได้เฉพาะ PENDING หรือ CALCULATED
+- **Gates:** รอบ CLOSED → 400 / มีแถว CALCULATED แถวใดและไม่มี `allowExported` → 409 `exportedPayrolls[]`
 
 ---
 
-## cancelPayroll(id) / cancelAllPayrolls(payPeriodId)
+## cancelPayroll(id, { allowExported }) / cancelAllPayrolls(payPeriodId, { allowExported })
 
 ### cancelPayroll
 
 - ใช้ได้เฉพาะ PENDING หรือ CALCULATED
+- **Gates:** รอบ CLOSED → 400 / CALCULATED ไม่มี `allowExported` → 409 `{ payRef }`
 - Transaction:
   1. ดึง timeEntryIds จาก PayrollRelate
   2. ลบ PayrollRelate ทั้งหมด
@@ -83,6 +86,7 @@ PAY-{year}-{periodNo 2 หลัก}-{seq 3 หลัก}
 
 - ทำเช่นเดียวกันแต่วนลูปทุก payroll ที่ PENDING หรือ CALCULATED ใน payPeriod
 - PayPeriod ต้องเป็น OPEN
+- **Gate:** มีแถว CALCULATED และไม่มี `allowExported` → 409 `exportedPayrolls[]`
 
 ---
 
@@ -93,9 +97,18 @@ PAY-{year}-{periodNo 2 หลัก}-{seq 3 หลัก}
   4 คอลัมน์ตาม sheet Transaction ของ KBank template
   (D เลขบัญชี string / E ชื่อ / F netPay / G Bene Ref = payroll.payRef)
   — คนไม่มีเลขบัญชีออกแถวแต่ช่องบัญชีว่าง
-- generate ไฟล์ก่อน แล้วค่อยอัปเดต Payroll PENDING → CALCULATED
+- **export = finalize รอบ**: generate ไฟล์ก่อน (พัง = สถานะไม่เปลี่ยน) แล้วใน transaction เดียว
+  flip Payroll PENDING → CALCULATED + **PayPeriod OPEN → CLOSED**
+- re-export หลัง reopen ได้ (ต้อง OPEN) — ไฟล์เป็น snapshot เต็มของรอบ
+  (รวมแถว CALCULATED/PAID เดิม ตัดเฉพาะ CANCELLED)
 - response เป็น binary file attachment (ไม่ใช่ JSON)
 - payRef ในคอลัมน์ G คือ key สำหรับ importBankFile จับคู่ยืนยัน PAID
+
+## importBankFile(payPeriodId) — TODO stub
+
+- **ทำได้เฉพาะ PayPeriod CLOSED** (status อื่น → 400) — import คือ step ปิดบัญชีรอบ CALCULATED → PAID
+- ปัจจุบันยังเป็น stub (`TODO: Bank import not implemented`) — ยังไม่มี path ไหนตั้ง PAID/paidDate
+- เป้าหมาย: parse ไฟล์ผลโอน จับคู่ Bene Ref ↔ payRef → Payroll CALCULATED → PAID + TimeEntry.paidDate
 
 ## closePayPeriod(payPeriodId, { force })
 

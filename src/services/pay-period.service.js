@@ -492,7 +492,7 @@ class PayPeriodService {
         };
     }
 
-    async cancelAllPayrolls(payPeriodId) {
+    async cancelAllPayrolls(payPeriodId, { allowExported = false } = {}) {
         const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
         if (payPeriod.status !== 'OPEN') {
@@ -504,11 +504,20 @@ class PayPeriodService {
                 payPeriodId,
                 status: { [Op.in]: ['PENDING', 'CALCULATED'] },
             },
-            attributes: ['id'],
+            attributes: ['id', 'payRef', 'status'],
         });
 
         if (payrolls.length === 0) {
             return { cancelled: 0, message: 'ไม่มีรายการจ่ายเงินที่สามารถยกเลิกได้' };
+        }
+
+        // gate: มีแถว export ไปแล้ว (CALCULATED) ต้องยืนยัน allowExported (กติกา #3)
+        const exportedRefs = payrolls.filter((p) => p.status === 'CALCULATED').map((p) => p.payRef);
+        if (exportedRefs.length > 0 && !allowExported) {
+            throw err.conflict(
+                { exportedPayrolls: exportedRefs },
+                `มีรายการที่ส่งออกไฟล์แล้ว ${exportedRefs.length} รายการ หากส่งไฟล์ให้ธนาคารไปแล้ว การยกเลิกจะทำให้ยอดไม่ตรงกัน (ส่ง allowExported เพื่อยืนยัน)`,
+            );
         }
 
         const payrollIds = payrolls.map((p) => p.id);
@@ -547,9 +556,12 @@ class PayPeriodService {
         return { cancelled: payrollIds.length, message: `ยกเลิกรายการจ่ายเงิน ${payrollIds.length} รายการสำเร็จ` };
     }
 
-    async recalculatePayPeriod(payPeriodId) {
+    async recalculatePayPeriod(payPeriodId, { allowExported = false } = {}) {
         const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
+        if (payPeriod.status !== 'OPEN') {
+            throw err.badRequest(null, 'รอบจ่ายปิดแล้ว ไม่สามารถคำนวณใหม่ได้ (ใช้เปิดรอบใหม่ก่อน)');
+        }
 
         const { startDate, endDate } = payPeriod;
 
@@ -563,6 +575,15 @@ class PayPeriodService {
 
         if (payrolls.length === 0) {
             return { updated: 0, payrolls: [], warnings: [] };
+        }
+
+        // gate: มีแถว export ไปแล้ว (CALCULATED) ต้องยืนยัน allowExported (กติกา #3)
+        const exportedRefs = payrolls.filter((p) => p.status === 'CALCULATED').map((p) => p.payRef);
+        if (exportedRefs.length > 0 && !allowExported) {
+            throw err.conflict(
+                { exportedPayrolls: exportedRefs },
+                `มีรายการที่ส่งออกไฟล์แล้ว ${exportedRefs.length} รายการ หากส่งไฟล์ให้ธนาคารไปแล้ว การคำนวณใหม่จะทำให้ยอดไม่ตรงกัน (ส่ง allowExported เพื่อยืนยัน)`,
+            );
         }
 
         // Carryover: correction/retro จากรอบก่อน (business rule เดียวกับ createPayrolls)
@@ -704,10 +725,16 @@ class PayPeriodService {
         // generate ก่อน flip สถานะ — ถ้า generate พัง สถานะไม่เปลี่ยน
         const { buffer, filename } = await this._generateExcelFile(payPeriodId);
 
-        const [updatedCount] = await Payroll.update(
-            { status: 'CALCULATED' },
-            { where: { payPeriodId, status: 'PENDING' } },
-        );
+        // export = finalize รอบ: flip PENDING → CALCULATED + ปิดรอบ ใน transaction เดียว
+        // (docs/PAYROLL-EXPORT-LOCK-PLAN.md กติกา #1)
+        const updatedCount = await sequelize.transaction(async (t) => {
+            const [count] = await Payroll.update(
+                { status: 'CALCULATED' },
+                { where: { payPeriodId, status: 'PENDING' }, transaction: t },
+            );
+            await payPeriod.update({ status: 'CLOSED' }, { transaction: t });
+            return count;
+        });
 
         return { buffer, filename, updatedCount };
     }
@@ -741,11 +768,12 @@ class PayPeriodService {
     }
 
     // //TODO - Parse bank file and update payroll status to PAID
+    // (ทำได้เฉพาะรอบ CLOSED — import คือ step ปิดบัญชี CALCULATED → PAID กติกา #4)
     async importBankFile(payPeriodId) {
         const payPeriod = await PayPeriod.findByPk(payPeriodId);
         if (!payPeriod) throw err.notFound({ id: payPeriodId }, 'ไม่พบรอบจ่ายเงิน');
-        if (payPeriod.status === 'CLOSED') {
-            throw err.badRequest(null, 'รอบจ่ายปิดแล้ว ไม่สามารถนำเข้าไฟล์ธนาคารได้');
+        if (payPeriod.status !== 'CLOSED') {
+            throw err.badRequest(null, 'นำเข้าไฟล์ธนาคารได้เฉพาะรอบที่ปิดแล้วเท่านั้น');
         }
 
         return { message: 'TODO: Bank import not implemented' };

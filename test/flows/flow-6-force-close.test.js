@@ -125,9 +125,9 @@ describe('Flow 6: Force close — ต้องปิดรอบทันที�
         await api.createPayrolls(periodId);
         await api.exportPeriod(periodId);
 
-        // ปิดรอบปกติ — ไม่ต้อง force
+        // export ปิดรอบให้แล้ว — ปิดซ้ำด้วยมือต้อง 400 (ไม่ต้อง force ไม่ต้องปิดซ้ำ)
         const closeRes = await api.closePeriod(periodId, false);
-        expect(closeRes.status).toBe(200);
+        expect(closeRes.status).toBe(400);
 
         const period = await api.getPayPeriodById(periodId);
         expect(period.body.data.status).toBe('CLOSED');
