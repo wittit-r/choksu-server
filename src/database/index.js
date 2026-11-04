@@ -35,6 +35,6 @@ export const {
     Branch, Position, Contract, PayPeriod, User, Session, AuditLog,
     WorkLeader, Employee, WageRate, BillRate, TimeSheet, TimeEntry,
     Holiday, LeaveType, Leave, LeaveEntitlement,
-    Payroll, PayrollRelate, InvoicePeriod, Invoice, InvoiceRelate,
+    Payroll, PayrollRelate, SsoConfig, InvoicePeriod, Invoice, InvoiceRelate,
 } = db;
 export default db;

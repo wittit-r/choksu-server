@@ -12,6 +12,7 @@ import holidayRoutes from "./holiday.routes.js";
 import leaveRoutes from "./leave.routes.js";
 import leaveTypeRoutes from "./leave-type.routes.js";
 import leaveEntitlementRoutes from "./leave-entitlement.routes.js";
+import ssoConfigRoutes from "./sso-config.routes.js";
 
 const router = express.Router();
 
@@ -53,5 +54,8 @@ router.use('/leave-types', leaveTypeRoutes);
 
 // Leave Entitlement routes
 router.use('/leave-entitlements', leaveEntitlementRoutes);
+
+// SSO Config routes
+router.use('/sso-configs', ssoConfigRoutes);
 
 export default router;
